@@ -1,6 +1,8 @@
 #pragma once
 
+#if defined __linux__
 #include <sys/types.h> // ssize_t
+#endif
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <netinet/in.h> // sockaddr

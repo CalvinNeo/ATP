@@ -5,12 +5,15 @@
 #include <cstdio>
 #include <vector>
 #include <chrono>
+#include <map>
+#include <cstdarg>
 
 template <typename T>
 struct SizableCircularBuffer {
     // This is the mask. Since it's always a power of 2, adding 1 to this value will return the size.
     size_t mask;
-    std::vector<T> elements;
+    typedef std::pair<size_t, T> _Item;
+    std::vector<_Item> elements;
     SizableCircularBuffer(){
 
     }
@@ -24,27 +27,33 @@ struct SizableCircularBuffer {
         grow(size);
     }
     T get(size_t i) const { 
-        return elements[i & mask]; 
+        return elements[i & mask].second; 
     }
     void put(size_t i, T data) { 
-        elements[i & mask] = data;
+        elements[i & mask] = std::make_pair(i, data);
     }
 
-    void grow(size_t index){
+    void grow(size_t atleast_size){
         // Figure out the new size.
-        size_t size = mask + 1;
-        do size *= 2; while (index >= size);
+        // TODO make it effcient
+        std::vector<_Item> old_elements = elements;
+        size_t old_size = size();
 
-        elements.resize(size, T{});
+        size_t new_size = mask + 1;
+        do new_size *= 2; while (atleast_size >= new_size);
+        elements.resize(new_size, _Item{});
+        mask = new_size - 1;
 
-        // Swap to the newly allocated buffer
-        mask = size - 1;
+        for(size_t i = 0; i < old_size; i++){
+            size_t & seq = old_elements[i].first;
+            elements[seq & mask] = old_elements[i];
+        }
     }
-    void ensure_size(size_t index) { 
-        if (index > mask) 
-            grow(index); 
+    void ensure_size(size_t atleast_size) { 
+        if (atleast_size > size()) 
+            grow(atleast_size); 
     }
-    size_t size() { 
+    size_t size() const { 
         return mask + 1; 
     }
 };
@@ -57,3 +66,4 @@ inline uint64_t get_current_ms(){
     std::time_t timestamp = tmp.count();  
     return (uint64_t)timestamp;  
 }
+

@@ -1,7 +1,6 @@
 #include "error.h"
 #include <syslog.h>
 
-
 #define MAXLINE 4096
 
 using namespace std;
