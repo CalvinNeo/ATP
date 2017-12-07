@@ -10,6 +10,7 @@ int atp_default_get_read_buffer_size(atp_callback_arguments * args);
 int atp_default_get_random(atp_callback_arguments * args);
 int atp_default_sendto(atp_callback_arguments * args);
 int atp_default_connect(atp_callback_arguments * args);
+int atp_default_bind(atp_callback_arguments * args);
 int atp_default_log(atp_callback_arguments * args);
 int atp_default_log_normal(atp_callback_arguments * args);
 int atp_default_log_debug(atp_callback_arguments * args);

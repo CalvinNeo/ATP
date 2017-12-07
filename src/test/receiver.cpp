@@ -2,11 +2,8 @@
 #include "../atp_impl.h"
 #include <iostream>
 
-static atp_context * ctx;
-
 int main(){
-    std::cout << get_current_ms();
-    // ctx = atp_init();
-    // atp_socket atp_sock{ctx};
+    atp_context * context = atp_init();
+    atp_socket * atp_sock = atp_create_socket(context);
     return 0;
 }

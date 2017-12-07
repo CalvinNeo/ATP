@@ -1,18 +1,13 @@
 #pragma once
 
-#if defined __linux__
 #include <sys/types.h> // ssize_t
-#endif
 #include <sys/socket.h>
-#include <sys/time.h>
 #include <netinet/in.h> // sockaddr
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <unistd.h>
 #include <sys/wait.h>
-#include <sys/uio.h>
-
 
 #include "error.h"
 #include <ctime>

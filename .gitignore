@@ -32,6 +32,8 @@
 *.app
 
 *.log
+*.tags*
 
 bin/
 udp_test/
+core

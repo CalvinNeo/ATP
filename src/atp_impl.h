@@ -1,7 +1,7 @@
 #pragma once
 
-#include "udp_util.h"
 #include "atp.h"
+#include "error.h"
 #include "scaffold.h"
 #include "atp_callback.h"
 #include <cstdio>
@@ -40,6 +40,11 @@
 void log_fatal(ATPSocket * socket, char const *fmt, ...);
 void log_debug(ATPSocket * socket, char const *fmt, ...);
 void log_note(ATPSocket * socket, char const *fmt, ...);
+void log_fatal(ATPContext * context, char const *fmt, ...);
+void log_debug(ATPContext * context, char const *fmt, ...);
+void log_note(ATPContext * context, char const *fmt, ...);
+
+#define SA struct sockaddr
 
 struct PACKED_ATTRIBUTE ATPPacket{
     // apt packet layout, trivial
@@ -48,7 +53,7 @@ struct PACKED_ATTRIBUTE ATPPacket{
     // seq_nr and ack_nr are now packet-wise rather than byte-wise
     uint32_t seq_nr;
     uint32_t ack_nr;
-    uint16_t head_size; uint16_t flags;
+    uint16_t peer_sock_id; uint16_t flags;
 
 #define MAKE_FLAGS_GETTER_SETTER(fn, mn) void set_##fn(char fn){ \
         if(fn == 1) flags |= mn; else flags &= (~mn); \
@@ -81,17 +86,18 @@ enum CONN_STATE_ENUM {
 
     CS_SYN_SENT,
     CS_SYN_RECV,
+    CS_RESET,
 
     CS_CONNECTED,
     CS_CONNECTED_FULL,
 
-    CS_FIN_WAIT_1,
-    CS_CLOSE_WAIT,
-    CS_FIN_WAIT_2,
-    CS_LAST_ACK,
+    CS_FIN_WAIT_1, // A
+    CS_CLOSE_WAIT, // B
+    CS_FIN_WAIT_2, // A
+    CS_LAST_ACK, // B
+    // the end of side A, wait 2 * MSL and then goto CS_DESTROY
     CS_TIME_WAIT,
-
-    CS_RESET,
+    // the end of side B
     CS_DESTROY,
 
     CS_STATE_COUNT
@@ -133,11 +139,11 @@ struct ATPAddrHandle{
             err_sys("inet_pton error 0"); 
         sa.sin_port = htons(_port);
     }
-    const char * to_string() const{
+    const char * to_string(){
         ::inet_ntop(sa.sin_family, &addr(), fmt, INET_ADDRSTRLEN);
         return const_cast<const char *>(fmt);
     }
-    const char * hash_code() const {
+    const char * hash_code() {
         std::sprintf(fmt, "%s:%05u", to_string(), host_port());
         return const_cast<const char *>(fmt);
     }
@@ -178,7 +184,7 @@ struct OutgoingPacket{
     bool holder = true;
     size_t length = 0; // length of the whole
     size_t payload = 0;
-    uint64_t time_sent; // microseconds
+    uint64_t timestamp; // microseconds
     uint32_t transmissions = 0; // total number of transmissions
     bool need_resend;
     char * data; // = head + data
@@ -195,7 +201,9 @@ struct OutgoingPacket{
 
 struct ATPSocket{
     ATPContext * context = nullptr;
-    size_t sock_id; // can conflict
+    // function as "port"
+    uint16_t sock_id;
+    uint16_t peer_sock_id;
 
     ATPAddrHandle src_addr;
     ATPAddrHandle dest_addr;
@@ -224,11 +232,54 @@ struct ATPSocket{
     ~ATPSocket(){
 
     }
-    ATPSocket(ATPContext * _context) : context(_context){
-        sock_id = std::rand();
-        conn_state = CS_UNINITIALIZED;
-        memset(hash_str, 0, sizeof hash_str);
+    ATPSocket(ATPContext * _context);
+    // HELPERS
+    void register_to_look_up();
+
+    atp_callback_arguments make_atp_callback_arguments(int method, OutgoingPacket * out_pkt, const ATPAddrHandle & addr){
+        if(out_pkt == nullptr){
+            // there's no OutgoingPacket to be sent, so pass `nullptr`
+            // out_pkt->length = 0, out_pkt->data = nullptr
+            return atp_callback_arguments{
+                context,
+                this,
+                method,
+                0, nullptr, 
+                (const SA*)&(addr.sa)
+            };
+        }else{
+            return atp_callback_arguments{
+                context,
+                this,
+                method,
+                out_pkt->length, out_pkt->data, 
+                (const SA*)&(addr.sa)
+            };
+        }
     }
+    OutgoingPacket * basic_send_packet(uint16_t flags){
+        ATPPacket pkt = ATPPacket{
+            seq_nr, //seq_nr
+            ack_nr, // ack_nr
+            peer_sock_id, // peer_sock_id
+            flags // flags
+        };
+        OutgoingPacket * out_pkt = new OutgoingPacket{
+            true,
+            sizeof (ATPPacket), // length, update by `add_data`
+            0, // payload, update by `add_data`
+            0, // timestamp, set at `send_packet`
+            0, // transmissions, update by `send_packet`
+            false, // need_resend, update by `send_packet`
+            reinterpret_cast<char *>(std::calloc(1, sizeof (ATPPacket))) // SYN packet will not contain data
+        };
+        std::memcpy(out_pkt->data, &pkt, sizeof (ATPPacket));
+    }
+
+    // INTERFACES
+    static const int perf_norm = 1;
+    static const int perf_drop = 2;
+    static const int perf_cache = 3;
     void clear(){
 
     }
@@ -236,81 +287,40 @@ struct ATPSocket{
         conn_state = CS_IDLE;
         src_addr.family() = family;
         dest_addr.family() = family;
+        #if defined (ATP_LOG) && ATP_LOG >= LOGLEVEL_DEBUG
+            log_debug(this, "socket init");
+        #endif
         if ((sockfd = socket(family, type, protocol)) < 0)
             err_sys("socket error");
     }
-    void register_to_look_up();
-
-    OutgoingPacket * basic_send_packet(uint16_t flags){
-        ATPPacket pkt = ATPPacket{
-            seq_nr, //seq_nr
-            ack_nr, // ack_nr
-            sizeof(ATPPacket), // header_size
-            flags // flags
-        };
-        OutgoingPacket * out_pkt = new OutgoingPacket{
-            true,
-            sizeof (ATPPacket), // length, update by `add_data`
-            0, // payload, update by `add_data`
-            0, // time_sent, set at `send_packet`
-            0, // transmissions, update by `send_packet`
-            false, // need_resend, update by `send_packet`
-            reinterpret_cast<char *>(std::calloc(1, sizeof (ATPPacket))) // SYN packet will not contain data
-        };
-        std::memcpy(out_pkt->data, &pkt, sizeof (ATPPacket));
-    }
     // active connect
     int connect(const ATPAddrHandle & to_addr);
-    void bind_default(){
-        if (::bind(sockfd, (SA *) &(src_addr.sa), sizeof src_addr.sa) < 0)
-            err_sys("bind error");
-    }
+    int bind(const ATPAddrHandle & to_addr);
     // passive connect
-    int accept(const ATPAddrHandle & to_addr, OutgoingPacket * recv_pkt){
-        assert(context != nullptr);
-        dest_addr = to_addr;
-
-        assert(conn_state == CS_IDLE);
-        conn_state = CS_SYN_RECV;
-        register_to_look_up();
-
-        seq_nr = rand();
-        ack_nr = recv_pkt->get_head()->seq_nr;
-
-        OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_SYN, PACKETFLAG_ACK));
-        send_packet(out_pkt);
-        return 0;
-    }
+    int accept(const ATPAddrHandle & to_addr, OutgoingPacket * recv_pkt);
     int receive(char * buffer, size_t len){
-        if(conn_state < CS_CONNECTED){
-            conn_state = CS_CONNECTED;
-        }
         return 0;
     }
-    int update_ack(){
-
-    }
-    void send_packet(OutgoingPacket * out_pkt);
-    void close(){
-
-    }
-    void add_data(OutgoingPacket * out_pkt, const void * buf, const size_t len){
-        out_pkt->length += len;
-        out_pkt->payload += len;
-
-        out_pkt->data = reinterpret_cast<char *>(std::realloc(out_pkt->data, out_pkt->length));
-        memcpy(out_pkt->data, out_pkt->data + out_pkt->length - len, len);
-    }
-    ssize_t write(const void * buf, const size_t len){
-
-    }
+    // when a ack packet comes, update ack_nr
+    int update_ack(OutgoingPacket * recv_pkt);
+    // `send_packet` will take over possession of `out_pkt`
+    int send_packet(OutgoingPacket * out_pkt);
+    int close();
+    void add_data(OutgoingPacket * out_pkt, const void * buf, const size_t len);
+    int write(const void * buf, const size_t len);
+    int ATPSocket::process_packet(OutgoingPacket * recv_pkt);
     int process(const ATPAddrHandle & addr, const char * buffer, size_t len);
-    const char * hash_code() const {
-        return dest_addr.hash_code();
+    const char * hash_code() {
+        return ATPSocket::make_hash_code(sock_id, dest_addr);
     }
-    const char * to_string() const {
-        sprintf(hash_str, "[%010d](%s:%05u)->(%s:%05u)", sock_id, src_addr.to_string(), src_addr.host_port()
+    const char * to_string() {
+        sprintf(hash_str, "[%05u](%s:%05u)->(%s:%05u)", sock_id, src_addr.to_string(), src_addr.host_port()
             , dest_addr.to_string(), dest_addr.host_port());
+        return const_cast<const char *>(hash_str);
+    }
+    static const char * make_hash_code(uint16_t sock_id, const ATPAddrHandle & dest_addr){
+        static char hash_str[INET_ADDRSTRLEN * 2 + 5 * 2 + 10 * 3];
+        sprintf(hash_str, "[%05u]%s", sock_id, dest_addr.hash_code());
         return const_cast<const char *>(hash_str);
     }
 private:
@@ -336,6 +346,7 @@ struct ATPContext{
         callbacks[ATP_CALL_GET_RANDOM] = atp_default_get_random;
         callbacks[ATP_CALL_SENDTO] = atp_default_sendto;
         callbacks[ATP_CALL_CONNECT] = atp_default_connect;
+        callbacks[ATP_CALL_BIND] = atp_default_bind;
         callbacks[ATP_CALL_LOG] = atp_default_log;
         callbacks[ATP_CALL_LOG_NORMAL] = atp_default_log_normal;
         callbacks[ATP_CALL_LOG_DEBUG] = atp_default_log_debug;
@@ -358,6 +369,10 @@ struct ATPContext{
 
     std::vector<ATPSocket *> sockets;
     std::map<std::string, ATPSocket *> look_up;
+
+    uint16_t new_sock_id(){
+        return std::rand();
+    }
 };
 
 inline ATPContext & get_context(){

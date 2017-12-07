@@ -26,6 +26,12 @@ int atp_default_sendto(atp_callback_arguments * args){
     return sendto(socket->sockfd, args->data, args->length, 0, sa, len);
 }
 int atp_default_connect(atp_callback_arguments * args){
+    atp_socket * socket = args->socket;
+    const struct sockaddr * sa = args->addr;
+    socklen_t len = args->addr_len;
+    return ::bind(socket->sockfd, sa, len);
+}
+int atp_default_bind(atp_callback_arguments * args){
     return 0;
 }
 int atp_default_log(atp_callback_arguments * args){
