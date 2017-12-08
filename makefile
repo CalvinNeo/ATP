@@ -1,7 +1,7 @@
 CC = gcc
 CXX = g++
 
-CFLAGS=-Wall -DPOSIX -g -O3 -fpermissive -fPIC -std=c++1z $(NO_WARN)
+CFLAGS=-w -DPOSIX -g -O0 -fpermissive -fPIC -std=c++1z $(NO_WARN)
 OBJ_EXT=o
 
 SRC_ROOT = ./src

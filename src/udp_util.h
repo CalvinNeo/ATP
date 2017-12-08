@@ -24,3 +24,4 @@ typedef void Sigfunc(int);
 Sigfunc * signal(int signo, Sigfunc *func);
 
 int make_socket(int family, int type, int protocol, int port, const char * ipaddr_str);
+struct sockaddr_in make_socketaddr_in(int family, const char * ipaddr_str, int port);

@@ -12,10 +12,6 @@ static void err_doit(int errnoflag, int level, const char *fmt, va_list ap)
 
     errno_save = errno; 
     vsnprintf(buf, MAXLINE, fmt, ap);
-    n = strlen(buf);
-    if (errnoflag)
-        snprintf(buf + n, MAXLINE - n, ": %s", strerror(errno_save));
-    strcat(buf, "\n");
     
     fflush(stdout);
     fputs(buf, stderr);
@@ -30,5 +26,5 @@ void err_sys(const char *fmt, ...)
     va_start(ap, fmt);
     err_doit(1, LOG_ERR, fmt, ap);
     va_end(ap);
-    exit(1);
+    // exit(1);
 }

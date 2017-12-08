@@ -11,25 +11,31 @@ Sigfunc * signal(int signo, Sigfunc *func)
     return(oact.sa_handler);
 }
 
-int make_socket(int family, int type, int protocol, int port, const char * ipaddr_str) {
-    int sockfd;
+struct sockaddr_in make_socketaddr_in(int family, const char * ipaddr_str, int port){
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof addr);
     addr.sin_family = family;
     addr.sin_port = htons(port);
 
-    if ((sockfd = socket(family, type, protocol)) < 0)
-        err_sys("socket error");
-
-    int n;
     if(ipaddr_str == nullptr) {
         addr.sin_addr.s_addr = htonl(INADDR_ANY);
     }
     else {
+        int n;
         if ((n = inet_pton(family, ipaddr_str, &addr.sin_addr)) < 0)
             err_sys("inet_pton error -1"); 
         else if (n == 0)
             err_sys("inet_pton error 0"); 
     }
+
+    return addr;
+}
+
+int make_socket(int family, int type, int protocol) {
+    int sockfd;
+
+    if ((sockfd = socket(family, type, protocol)) < 0)
+        err_sys("socket error");
+
     return sockfd;
 }

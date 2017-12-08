@@ -1,6 +1,5 @@
 #pragma once
 
-#include "atp.h"
 #include "error.h"
 #include "scaffold.h"
 #include "atp_callback.h"
@@ -12,6 +11,8 @@
 #include <cstdlib>
 #include <algorithm>
 #include <functional>
+#include <queue>
+
 
 #define ETHERNET_MTU 1500
 #define IPV4_HEADER_SIZE 20
@@ -37,12 +38,36 @@
 #define LOGLEVEL_DEBUG 3
 #define ATP_LOG LOGLEVEL_DEBUG
 
-void log_fatal(ATPSocket * socket, char const *fmt, ...);
-void log_debug(ATPSocket * socket, char const *fmt, ...);
-void log_note(ATPSocket * socket, char const *fmt, ...);
-void log_fatal(ATPContext * context, char const *fmt, ...);
-void log_debug(ATPContext * context, char const *fmt, ...);
-void log_note(ATPContext * context, char const *fmt, ...);
+// void log_fatal(ATPSocket * socket, char const* func_name, char const *fmt, ...);
+// void log_debug(ATPSocket * socket, char const* func_name, char const *fmt, ...);
+// void log_note(ATPSocket * socket, char const* func_name, char const *fmt, ...);
+// void log_fatal(ATPContext * context, char const* func_name, char const *fmt, ...);
+// void log_debug(ATPContext * context, char const* func_name, char const *fmt, ...);
+// void log_note(ATPContext * context, char const* func_name,char const *fmt, ...);
+// #define log_fatal(socket, fmt, ...) _log_fatal(socket, __FUNCTION__, fmt, __VA_ARGS__ )
+// #define log_note(socket, fmt, ...) _log_note(socket, __FUNCTION__, fmt, __VA_ARGS__ )
+// #define log_debug(socket, fmt, ...) _log_debug(socket, __FUNCTION__, fmt, __VA_ARGS__ )
+
+#define _log_doit _log_doit1
+#define log_fatal log_fatal1
+#define log_debug log_debug1
+#define log_note log_note1
+void _log_doit1(ATPSocket * socket, char const* func_name, int level, char const * fmt, va_list va);
+void _log_doit1(ATPContext * context, char const* func_name, int level, char const * fmt, va_list va);
+std::function<void(ATPContext *, char const *, va_list)> _log_doit2_context(const char* func_name, int level);
+std::function<void(ATPSocket *, char const *, va_list)> _log_doit2_socket(const char* func_name, int level);
+void log_fatal1(ATPSocket * socket, char const *fmt, ...);
+void log_debug1(ATPSocket * socket, char const *fmt, ...);
+void log_note1(ATPSocket * socket, char const *fmt, ...);
+void log_fatal1(ATPContext * context, char const *fmt, ...);
+void log_debug1(ATPContext * context, char const *fmt, ...);
+void log_note1(ATPContext * context, char const *fmt, ...);
+#define log_fatal2_socket _log_doit2_socket(__FUNCTION__, LOGLEVEL_FATAL)
+#define log_debug2_socket _log_doit2_socket(__FUNCTION__, LOGLEVEL_DEBUG)
+#define log_note2_socket _log_doit2_socket(__FUNCTION__, LOGLEVEL_NOTE)
+#define log_fatal2_context _log_doit2_context(__FUNCTION__, LOGLEVEL_FATAL)
+#define log_debug2_context _log_doit2_context(__FUNCTION__, LOGLEVEL_DEBUG)
+#define log_note2_context _log_doit2_context(__FUNCTION__, LOGLEVEL_NOTE)
 
 #define SA struct sockaddr
 
@@ -84,6 +109,7 @@ enum CONN_STATE_ENUM {
     CS_UNINITIALIZED = 0,
     CS_IDLE,
 
+    CS_LISTEN,
     CS_SYN_SENT,
     CS_SYN_RECV,
     CS_RESET,
@@ -92,8 +118,15 @@ enum CONN_STATE_ENUM {
     CS_CONNECTED_FULL,
 
     CS_FIN_WAIT_1, // A
+
+    // this is half cloded state. B got A's is fin, and will not send data.
+    // But B can still send data, then A can send ack in response
     CS_CLOSE_WAIT, // B
+
+    // A get ack of his fin
     CS_FIN_WAIT_2, // A
+
+    // B sent his fin
     CS_LAST_ACK, // B
     // the end of side A, wait 2 * MSL and then goto CS_DESTROY
     CS_TIME_WAIT,
@@ -137,7 +170,7 @@ struct ATPAddrHandle{
             err_sys("inet_pton error -1"); 
         else if (n == 0)
             err_sys("inet_pton error 0"); 
-        sa.sin_port = htons(_port);
+        set_port(_port);
     }
     const char * to_string(){
         ::inet_ntop(sa.sin_family, &addr(), fmt, INET_ADDRSTRLEN);
@@ -146,6 +179,12 @@ struct ATPAddrHandle{
     const char * hash_code() {
         std::sprintf(fmt, "%s:%05u", to_string(), host_port());
         return const_cast<const char *>(fmt);
+    }
+    void set_port(in_port_t _port){
+        sa.sin_port = htons(_port);
+    }
+    void set_addr(in_addr_t _addr){
+        sa.sin_addr.s_addr = htonl(_addr);
     }
     in_port_t & port(){
         return sa.sin_port;
@@ -159,10 +198,10 @@ struct ATPAddrHandle{
     const in_addr_t & addr() const{
         return sa.sin_addr.s_addr;
     }
-    int16_t host_port() const{
+    uint16_t host_port() const{
         return ntohs(sa.sin_port);
     }
-    int32_t host_addr() const{
+    uint32_t host_addr() const{
         return ntohl(sa.sin_addr.s_addr);
     }
     decltype(sockaddr_in::sin_family) & family() {
@@ -197,6 +236,9 @@ struct OutgoingPacket{
     ATPPacket * get_head(){
         return reinterpret_cast<ATPPacket *>(data);
     }
+    const ATPPacket * get_head() const {
+        return reinterpret_cast<ATPPacket *>(data);
+    }
 };
 
 struct ATPSocket{
@@ -206,13 +248,30 @@ struct ATPSocket{
     uint16_t peer_sock_id;
 
     ATPAddrHandle src_addr;
+    ATPAddrHandle & get_src_addr(){
+        if (conn_state == CS_UNINITIALIZED)
+        {
+            return src_addr;
+        }else{
+            if (src_addr.host_port() == 0 && src_addr.host_addr() == 0)
+            {
+            }
+            socklen_t my_sock_len = sizeof(src_addr.sa);
+            getsockname(sockfd, (SA*) &(src_addr.sa), &my_sock_len);
+            return src_addr;
+        }
+    }
     ATPAddrHandle dest_addr;
     int family; int type; int protocol;
     int sockfd;
 
     CONN_STATE_ENUM conn_state;
 
-    SizableCircularBuffer<OutgoingPacket*> inbuf{15}, outbuf{15};
+    std::function<bool(OutgoingPacket*, OutgoingPacket*)> _cmp_outgoingpacket = [](OutgoingPacket* left, OutgoingPacket* right){
+        return (left->get_head()->seq_nr < right->get_head()->seq_nr);
+    };
+    std::priority_queue<OutgoingPacket*, std::vector<OutgoingPacket*>, decltype(_cmp_outgoingpacket)> inbuf;
+    SizableCircularBuffer<OutgoingPacket*> outbuf{15};
 
     uint32_t seq_nr = 1;
     uint32_t ack_nr = 0;
@@ -245,7 +304,8 @@ struct ATPSocket{
                 this,
                 method,
                 0, nullptr, 
-                (const SA*)&(addr.sa)
+                (const SA*)&(addr.sa),
+                sizeof(sockaddr_in)
             };
         }else{
             return atp_callback_arguments{
@@ -253,7 +313,8 @@ struct ATPSocket{
                 this,
                 method,
                 out_pkt->length, out_pkt->data, 
-                (const SA*)&(addr.sa)
+                (const SA*)&(addr.sa),
+                sizeof(sockaddr_in)
             };
         }
     }
@@ -274,6 +335,7 @@ struct ATPSocket{
             reinterpret_cast<char *>(std::calloc(1, sizeof (ATPPacket))) // SYN packet will not contain data
         };
         std::memcpy(out_pkt->data, &pkt, sizeof (ATPPacket));
+        return out_pkt;
     }
 
     // INTERFACES
@@ -283,18 +345,11 @@ struct ATPSocket{
     void clear(){
 
     }
-    void init(int family, int type, int protocol){
-        conn_state = CS_IDLE;
-        src_addr.family() = family;
-        dest_addr.family() = family;
-        #if defined (ATP_LOG) && ATP_LOG >= LOGLEVEL_DEBUG
-            log_debug(this, "socket init");
-        #endif
-        if ((sockfd = socket(family, type, protocol)) < 0)
-            err_sys("socket error");
-    }
+    // called by atp_create_socket
+    int init(int family, int type, int protocol);
     // active connect
     int connect(const ATPAddrHandle & to_addr);
+    int listen(uint16_t host_port);
     int bind(const ATPAddrHandle & to_addr);
     // passive connect
     int accept(const ATPAddrHandle & to_addr, OutgoingPacket * recv_pkt);
@@ -314,8 +369,8 @@ struct ATPSocket{
         return ATPSocket::make_hash_code(sock_id, dest_addr);
     }
     const char * to_string() {
-        sprintf(hash_str, "[%05u](%s:%05u)->(%s:%05u)", sock_id, src_addr.to_string(), src_addr.host_port()
-            , dest_addr.to_string(), dest_addr.host_port());
+        sprintf(hash_str, "[%05u](%s:%05u)->(%s:%05u) fd:%d", sock_id, get_src_addr().to_string(), get_src_addr().host_port()
+            , dest_addr.to_string(), dest_addr.host_port(), sockfd);
         return const_cast<const char *>(hash_str);
     }
     static const char * make_hash_code(uint16_t sock_id, const ATPAddrHandle & dest_addr){
@@ -335,6 +390,7 @@ struct ATPContext{
         }
         sockets.clear();
         look_up.clear();
+        listen_sockets.clear();
     }
     void init(){
         memset(callbacks, 0, sizeof callbacks);
@@ -353,6 +409,7 @@ struct ATPContext{
         callbacks[ATP_CALL_OPT_SENDBUF] = atp_default_opt_sndbuf;
         callbacks[ATP_CALL_OPT_RECVBUF] = atp_default_opt_rcvbuf;
         clear();
+        std::srand(get_current_ms());
     }
 
     ATPContext(){
@@ -369,6 +426,7 @@ struct ATPContext{
 
     std::vector<ATPSocket *> sockets;
     std::map<std::string, ATPSocket *> look_up;
+    std::map<uint16_t, ATPSocket *> listen_sockets;
 
     uint16_t new_sock_id(){
         return std::rand();
@@ -379,4 +437,3 @@ inline ATPContext & get_context(){
     static ATPContext context;
     return context;
 }
-
