@@ -7,47 +7,54 @@
 #include <chrono>
 #include <map>
 #include <cstdarg>
+#include <iostream>
 
 template <typename T>
 struct SizableCircularBuffer {
     // This is the mask. Since it's always a power of 2, adding 1 to this value will return the size.
-    size_t mask = 0;
     typedef std::pair<size_t, T> _Item;
     std::vector<_Item> elements;
+    size_t oldest_index = 0;
+    typedef _Item value_type;
+
+    typename std::vector<_Item>::iterator begin() { return elements.begin(); }
+    typename std::vector<_Item>::iterator end() { return elements.end(); }
+    typename std::vector<_Item>::const_iterator begin() const { return elements.begin(); }
+    typename std::vector<_Item>::const_iterator end() const  { return elements.end(); }
+
     SizableCircularBuffer(){
 
     }
-    SizableCircularBuffer(size_t origin_mask){
-        size_t size = origin_mask + 1;
-        if((size & (size - 1)) == 0){
-            size = 1;
-            do size *= 2; while (origin_mask >= size);
+    SizableCircularBuffer(size_t origin_size){
+        if((origin_size & (origin_size - 1)) != 0){
+            size_t size = 1;
+            do size *= 2; while (origin_size > size);
+            origin_size = size;
         }
-        mask = size - 1;
-        elements.resize(size);
+        elements.resize(origin_size);
     }
     T get(size_t i) const { 
-        return elements[i & mask].second; 
+        return elements[i % size()].second; 
     }
     void put(size_t i, T data) { 
-        elements[i & mask] = std::make_pair(i, data);
+        
     }
-
+    void raw_put(size_t i, T data){
+        elements[i % size()] = std::make_pair(i, data);
+    }
     void grow(size_t atleast_size){
         // Figure out the new size.
         // TODO make it effcient
         std::vector<_Item> old_elements = elements;
         size_t old_size = size();
 
-        size_t new_size = mask + 1;
+        size_t new_size = old_size;
         do new_size *= 2; while (atleast_size >= new_size);
         elements.resize(new_size, _Item{});
-        mask = new_size - 1;
 
         for(size_t i = 0; i < old_size; i++){
-            printf("%d %d %d %d\n", mask, new_size, old_size, i);
-            size_t & seq = old_elements[i].first;
-            elements[seq & mask] = old_elements[i];
+            size_t seq = old_elements[i].first;
+            elements[seq % size()] = old_elements[i];
         }
     }
     void ensure_size(size_t atleast_size) { 
@@ -55,7 +62,7 @@ struct SizableCircularBuffer {
             grow(atleast_size); 
     }
     size_t size() const { 
-        return mask + 1; 
+        return elements.size(); 
     }
 };
 

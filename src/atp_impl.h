@@ -3,7 +3,7 @@
 #include "error.h"
 #include "scaffold.h"
 #include "atp_common.h"
-#include "atp_callback.h"
+#include "atp.h"
 #include <cstdio>
 #include <string>
 #include <map>
@@ -234,6 +234,13 @@ struct OutgoingPacket{
     }
 };
 
+struct _cmp_outgoingpacket{  
+    bool operator()(OutgoingPacket * left, OutgoingPacket * right){  
+        if(left->get_head()->seq_nr == right->get_head()->seq_nr)  return left > right;  
+        return left->get_head()->seq_nr > right->get_head()->seq_nr;  
+    }  
+}; 
+
 struct ATPSocket{
     ATPContext * context = nullptr;
     // function as "port"
@@ -260,14 +267,15 @@ struct ATPSocket{
 
     CONN_STATE_ENUM conn_state;
 
-    std::function<bool(OutgoingPacket*, OutgoingPacket*)> _cmp_outgoingpacket = [](OutgoingPacket* left, OutgoingPacket* right){
-        return (left->get_head()->seq_nr < right->get_head()->seq_nr);
-    };
-    std::priority_queue<OutgoingPacket*, std::vector<OutgoingPacket*>, decltype(_cmp_outgoingpacket)> inbuf;
-    SizableCircularBuffer<OutgoingPacket*> outbuf{15};
+    std::priority_queue<OutgoingPacket*, std::vector<OutgoingPacket*>, _cmp_outgoingpacket> inbuf;
+    std::priority_queue<OutgoingPacket*, std::vector<OutgoingPacket*>, _cmp_outgoingpacket> outbuf;
 
+    // my seq number
     uint32_t seq_nr = 1;
+    // peer's seq number acked by me
     uint32_t ack_nr = 0;
+    // my seq number acked by peer
+    uint32_t my_seq_acked_by_peer = 0;
 
     uint32_t rtt = 0;
     uint32_t rtt_var = 800;
@@ -285,7 +293,7 @@ struct ATPSocket{
 
 
     ~ATPSocket(){
-
+        clear();
     }
     ATPSocket(ATPContext * _context);
     // HELPERS
@@ -301,7 +309,6 @@ struct ATPSocket{
                 method,
                 0, nullptr, 
                 conn_state,
-                true, true, // writable; readable;
                 (const SA*)&(addr.sa),
                 sizeof(sockaddr_in)
             };
@@ -312,7 +319,6 @@ struct ATPSocket{
                 method,
                 out_pkt->length, out_pkt->data, 
                 conn_state,
-                true, true, // writable; readable;
                 (const SA*)&(addr.sa),
                 sizeof(sockaddr_in)
             };
@@ -340,28 +346,42 @@ struct ATPSocket{
 
     // INTERFACES
     void clear(){
-
+        // size_t index; OutgoingPacket * p;
+        // for(auto && [index, p] : outbuf){
+        // for(auto pr : outbuf){
+        //     delete pr.second;
+        // }
+        while(!outbuf.empty()){
+            delete outbuf.top();
+            outbuf.pop();
+        }
+        while(!inbuf.empty()){
+            delete inbuf.top();
+            inbuf.pop();
+        }
     }
     // called by atp_create_socket
     int init(int family, int type, int protocol);
     // active connect
-    int connect(const ATPAddrHandle & to_addr);
-    int listen(uint16_t host_port);
-    int bind(const ATPAddrHandle & to_addr);
+    ATP_PROC_RESULT connect(const ATPAddrHandle & to_addr);
+    ATP_PROC_RESULT listen(uint16_t host_port);
+    ATP_PROC_RESULT bind(const ATPAddrHandle & to_addr);
     // passive connect
-    int accept(const ATPAddrHandle & to_addr, OutgoingPacket * recv_pkt);
-    int receive(OutgoingPacket * recv_pkt);
+    ATP_PROC_RESULT accept(const ATPAddrHandle & to_addr, OutgoingPacket * recv_pkt);
+    ATP_PROC_RESULT receive(OutgoingPacket * recv_pkt);
     // `send_packet` will take over possession of `out_pkt`
-    int send_packet(OutgoingPacket * out_pkt);
+    ATP_PROC_RESULT send_packet(OutgoingPacket * out_pkt);
     ATP_PROC_RESULT close();
     void add_data(OutgoingPacket * out_pkt, const void * buf, const size_t len);
-    int write(const void * buf, const size_t len);
-    // handles FIN, when a ack packet comes, update ack_nr
+    ATP_PROC_RESULT write(const void * buf, const size_t len);
+    // handles FIN
     ATP_PROC_RESULT check_fin(OutgoingPacket * recv_pkt);
     // handles ACK, when a ack packet comes, update ack_nr
-    ATP_PROC_RESULT update_myack(OutgoingPacket * recv_pkt);
+    ATP_PROC_RESULT update_myack(OutgoingPacket * recv_pkt); 
     ATP_PROC_RESULT process(const ATPAddrHandle & addr, const char * buffer, size_t len);
     ATP_PROC_RESULT invoke_callback(int callback_type, atp_callback_arguments * args);
+    // update my_seq_acked_by_peer
+    ATP_PROC_RESULT do_ack_packet();
     const char * hash_code() {
         return ATPSocket::make_hash_code(sock_id, dest_addr);
     }
@@ -423,3 +443,5 @@ inline ATPContext & get_context(){
 
 
 void print_out(ATPSocket * socket, OutgoingPacket * out_pkt, const char * method);
+
+void init_callbacks(ATPSocket * socket);

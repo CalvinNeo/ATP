@@ -13,14 +13,17 @@ OBJS = $(patsubst $(SRC_ROOT)%, $(OBJ_ROOT)%, $(patsubst %cpp, %o, $(SRCS)))
 
 all: demo lib
 
-demo: receiver sender 
+demo: recv send 
 lib: libatp.so libatp.a
 
-receiver: $(OBJS)
-	$(CXX) $(CFLAGS) -o $(BIN_ROOT)/receiver $(SRC_ROOT)/test/receiver.cpp $(OBJS) -L/usr/lib/
+buffer_test: 
+	$(CXX) $(CFLAGS) -o $(BIN_ROOT)/buffer_test $(SRC_ROOT)/test/buffer_test.cpp -L/usr/lib/
 
-sender: $(OBJS)
-	$(CXX) $(CFLAGS) -o $(BIN_ROOT)/sender $(SRC_ROOT)/test/sender.cpp $(OBJS) -L/usr/lib/
+recv: $(OBJS)
+	$(CXX) $(CFLAGS) -o $(BIN_ROOT)/recv $(SRC_ROOT)/test/recv.cpp $(OBJS) -L/usr/lib/
+
+send: $(OBJS)
+	$(CXX) $(CFLAGS) -o $(BIN_ROOT)/send $(SRC_ROOT)/test/send.cpp $(OBJS) -L/usr/lib/
 
 libatp.so: $(OBJS)
 	$(CXX) $(CXXFLAGS) -o libatp.so -shared $(OBJS)

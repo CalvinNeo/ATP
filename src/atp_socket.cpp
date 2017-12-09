@@ -8,20 +8,7 @@ ATPSocket::ATPSocket(ATPContext * _context) : context(_context){
     memset(hash_str, 0, sizeof hash_str);
 
     memset(callbacks, 0, sizeof callbacks);
-    callbacks[ATP_CALL_ON_ACCEPT] = atp_default_on_accept;
-    callbacks[ATP_CALL_ON_ERROR] = atp_default_on_error; 
-    callbacks[ATP_CALL_ON_RECV] = atp_default_on_recv;
-    callbacks[ATP_CALL_ON_PEERCLOSE] = atp_default_on_peerclose;
-    callbacks[ATP_CALL_ON_DESTROY] = atp_default_on_destroy;
-    callbacks[ATP_CALL_ON_STATE_CHANGE] = atp_default_on_state_change;
-    callbacks[ATP_CALL_GET_READ_BUFFER_SIZE] = atp_default_get_read_buffer_size;
-    callbacks[ATP_CALL_GET_RANDOM] = atp_default_get_random;
-    callbacks[ATP_CALL_SENDTO] = atp_default_sendto;
-    callbacks[ATP_CALL_CONNECT] = atp_default_connect;
-    callbacks[ATP_CALL_BIND] = atp_default_bind;
-    callbacks[ATP_CALL_LOG] = atp_default_log;
-    callbacks[ATP_CALL_LOG_NORMAL] = atp_default_log_normal;
-    callbacks[ATP_CALL_LOG_DEBUG] = atp_default_log_debug;
+    init_callbacks(this);
 }
 
 void ATPSocket::register_to_look_up(){
@@ -45,7 +32,7 @@ int ATPSocket::init(int family, int type, int protocol){
     return sockfd;
 }
 
-int ATPSocket::connect(const ATPAddrHandle & to_addr){
+ATP_PROC_RESULT ATPSocket::connect(const ATPAddrHandle & to_addr){
     assert(context != nullptr);
     dest_addr = to_addr;
 
@@ -61,12 +48,12 @@ int ATPSocket::connect(const ATPAddrHandle & to_addr){
 
     // before sending packet, users can do something, like call `connect` to their UDP socket.
     atp_callback_arguments arg = make_atp_callback_arguments(ATP_CALL_CONNECT, out_pkt, dest_addr);
-    int result = invoke_callback(ATP_CALL_CONNECT, &arg);
+    ATP_PROC_RESULT result = invoke_callback(ATP_CALL_CONNECT, &arg);
 
     #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
         log_debug(this, "UDP socket connect to %s.", dest_addr.to_string());
     #endif
-    if (result != 0){
+    if (result == ATP_PROC_ERROR){
 
     } else{
         result = send_packet(out_pkt);
@@ -78,25 +65,30 @@ int ATPSocket::connect(const ATPAddrHandle & to_addr){
 }
 
 
-int ATPSocket::listen(uint16_t host_port){
+ATP_PROC_RESULT ATPSocket::listen(uint16_t host_port){
     conn_state = CS_LISTEN;
     // register to listen
     get_src_addr().set_port(host_port);
-    context->listen_sockets[host_port] = this;
-    #if defined (ATP_LOG_AT_DEBUG)
-        log_debug(this, "Listening port %u.", host_port);
-    #endif
-    return 0;
+    if (context->listen_sockets.find(host_port) != context->listen_sockets.end())
+    {
+        context->listen_sockets[host_port] = this;
+        #if defined (ATP_LOG_AT_DEBUG)
+            log_debug(this, "Listening port %u.", host_port);
+        #endif
+        return ATP_PROC_OK;
+    }else{
+        return ATP_PROC_ERROR;
+    }
 }
 
-int ATPSocket::bind(const ATPAddrHandle & to_addr){
+ATP_PROC_RESULT ATPSocket::bind(const ATPAddrHandle & to_addr){
     // there's no OutgoingPacket to be sent, so pass `nullptr`
     atp_callback_arguments arg = make_atp_callback_arguments(ATP_CALL_BIND, nullptr, to_addr);
-    int result = invoke_callback(ATP_CALL_BIND, &arg);
+    ATP_PROC_RESULT result = invoke_callback(ATP_CALL_BIND, &arg);
     return result;
 }
 
-int ATPSocket::accept(const ATPAddrHandle & to_addr, OutgoingPacket * recv_pkt){
+ATP_PROC_RESULT ATPSocket::accept(const ATPAddrHandle & to_addr, OutgoingPacket * recv_pkt){
     assert(context != nullptr);
     dest_addr = to_addr;
 
@@ -110,7 +102,7 @@ int ATPSocket::accept(const ATPAddrHandle & to_addr, OutgoingPacket * recv_pkt){
 
     OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_SYN, PACKETFLAG_ACK));
     add_data(out_pkt, &sock_id, sizeof(sock_id));
-    int result = send_packet(out_pkt);
+    ATP_PROC_RESULT result = send_packet(out_pkt);
 
     #if defined (ATP_LOG_AT_DEBUG)
         log_debug(this, "Accept SYN request from %s by sending SYN+ACK."
@@ -141,13 +133,10 @@ ATP_PROC_RESULT ATPSocket::receive(OutgoingPacket * recv_pkt){
     }
 }
 
-int ATPSocket::send_packet(OutgoingPacket * out_pkt){
+ATP_PROC_RESULT ATPSocket::send_packet(OutgoingPacket * out_pkt){
     uint64_t current_ms = get_current_ms();
     rto_timeout = current_ms + rto;
 
-
-    outbuf.ensure_size(cur_window_packets);
-    outbuf.put(seq_nr, out_pkt);
     // when the package is constructed, update `seq_nr` for the next package
     seq_nr++;
     cur_window_packets++;
@@ -162,19 +151,16 @@ int ATPSocket::send_packet(OutgoingPacket * out_pkt){
         print_out(this, out_pkt, "snd");
     #endif
 
+    outbuf.push(out_pkt);
+
     // udp send
     atp_callback_arguments arg = make_atp_callback_arguments(ATP_CALL_SENDTO, out_pkt, dest_addr);
-
-    int result = invoke_callback(ATP_CALL_SENDTO, &arg);
+    ATP_PROC_RESULT result = invoke_callback(ATP_CALL_SENDTO, &arg);
 
     #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
         log_debug(this, "UDP Send %u bytes.", result);
     #endif
-    if (result != out_pkt->length){
 
-    } else{
-
-    }
     return result;
 }
 
@@ -254,7 +240,7 @@ void ATPSocket::add_data(OutgoingPacket * out_pkt, const void * buf, const size_
     memcpy(out_pkt->data + out_pkt->length - len, buf, len);
 }
 
-int ATPSocket::write(const void * buf, const size_t len){
+ATP_PROC_RESULT ATPSocket::write(const void * buf, const size_t len){
     OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
     add_data(out_pkt, buf, len);
 
@@ -495,16 +481,8 @@ ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buff
         return result;
     } 
 
+    uint32_t old_ack_nr = ack_nr;
     int action = update_myack(recv_pkt);
-    if (action == ATP_PROC_FINISH)
-    {
-        return action;
-    }
-    if (pkt->get_fin())
-    {
-        result = check_fin(recv_pkt);
-        return result;
-    }
 
     switch(action){
         case ATP_PROC_DROP:
@@ -526,6 +504,8 @@ ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buff
             #endif
             inbuf.push(recv_pkt);
             result = ATP_PROC_OK;
+            break;
+        case ATP_PROC_FINISH:
             break;
     }
     if (action == ATP_PROC_OK)
@@ -557,11 +537,29 @@ ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buff
                     goto OUT_THE_LOOP;
                     result = ATP_PROC_OK;
                     break;
+                case ATP_PROC_FINISH:
+                    break;
             }
         }
         OUT_THE_LOOP:
             int aaa = 1;
     }
+    if (ack_nr != old_ack_nr)
+    {
+        // if ack_nr is updated, which means I read some packets from peer
+        // send an ack packet immediately
+        OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
+        send_packet(out_pkt);
+    }
+    if (action == ATP_PROC_FINISH)
+    {
+        result = action;
+    } 
+    else if (pkt->get_fin())
+    {
+        result = check_fin(recv_pkt);
+    }
+    // this->do_ack_packet(ack_nr);
     return result;
 }
 
@@ -573,5 +571,22 @@ ATP_PROC_RESULT ATPSocket::invoke_callback(int callback_type, atp_callback_argum
     #if defined (ATP_LOG_AT_DEBUG)
         log_debug(this, "An empty callback");
     #endif
-    return 0;
+    return ATP_PROC_OK;
+}
+
+ATP_PROC_RESULT ATPSocket::do_ack_packet(){
+    // ack n means ack [0..n]
+    while(!outbuf.empty()){
+        OutgoingPacket * out_pkt = outbuf.top();
+        if (out_pkt->get_head()->seq_nr <= my_seq_acked_by_peer)
+        {
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Remove ATPPackct seq_nr:%u from buffer", out_pkt->get_head()->seq_nr);
+            #endif
+            delete out_pkt;
+            outbuf.pop();
+        }else{
+            break;
+        }
+    }
 }

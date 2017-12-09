@@ -20,22 +20,19 @@ typedef struct ATPContext atp_context;
 
 
 enum ATP_CALLBACKTYPE_ENUM{
-    ATP_CALL_ON_ACCEPT = 0,
-    ATP_CALL_ON_ERROR,
-    ATP_CALL_ON_RECV,
+    ATP_CALL_ON_ERROR = 0,
     ATP_CALL_ON_PEERCLOSE,
     ATP_CALL_ON_DESTROY,
     ATP_CALL_ON_STATE_CHANGE,
     ATP_CALL_GET_READ_BUFFER_SIZE,
     ATP_CALL_GET_RANDOM,
     ATP_CALL_LOG,
-    ATP_CALL_SENDTO,
-    ATP_CALL_CONNECT,
+    ATP_CALL_SOCKET,
     ATP_CALL_BIND,
-
-    // context and socket options that may be set/queried
-    ATP_CALL_LOG_NORMAL,
-    ATP_CALL_LOG_DEBUG,
+    ATP_CALL_CONNECT,
+    ATP_CALL_ON_ACCEPT,
+    ATP_CALL_SENDTO,
+    ATP_CALL_ON_RECV,
 
     ATP_CALLBACK_SIZE, // must be the last
 };
@@ -46,7 +43,6 @@ struct atp_callback_arguments {
 	ATP_CALLBACKTYPE_ENUM callback_type;
     size_t length; char * data; // len(data) == length
     CONN_STATE_ENUM state;
-    bool writable; bool readable;
     union {
         const struct sockaddr * addr;
         int send;
