@@ -2,6 +2,7 @@
 
 #include "error.h"
 #include "scaffold.h"
+#include "atp_common.h"
 #include "atp_callback.h"
 #include <cstdio>
 #include <string>
@@ -36,38 +37,58 @@
 #define LOGLEVEL_FATAL 1
 #define LOGLEVEL_NOTE 2
 #define LOGLEVEL_DEBUG 3
-#define ATP_LOG LOGLEVEL_DEBUG
-
-// void log_fatal(ATPSocket * socket, char const* func_name, char const *fmt, ...);
-// void log_debug(ATPSocket * socket, char const* func_name, char const *fmt, ...);
-// void log_note(ATPSocket * socket, char const* func_name, char const *fmt, ...);
-// void log_fatal(ATPContext * context, char const* func_name, char const *fmt, ...);
-// void log_debug(ATPContext * context, char const* func_name, char const *fmt, ...);
-// void log_note(ATPContext * context, char const* func_name,char const *fmt, ...);
-// #define log_fatal(socket, fmt, ...) _log_fatal(socket, __FUNCTION__, fmt, __VA_ARGS__ )
-// #define log_note(socket, fmt, ...) _log_note(socket, __FUNCTION__, fmt, __VA_ARGS__ )
-// #define log_debug(socket, fmt, ...) _log_debug(socket, __FUNCTION__, fmt, __VA_ARGS__ )
+#define ATP_LOG_AT_NOTE
+// #define ATP_LOG_AT_DEBUG
+// #define ATP_LOG_UDP
 
 #define _log_doit _log_doit1
-#define log_fatal log_fatal1
-#define log_debug log_debug1
-#define log_note log_note1
 void _log_doit1(ATPSocket * socket, char const* func_name, int level, char const * fmt, va_list va);
 void _log_doit1(ATPContext * context, char const* func_name, int level, char const * fmt, va_list va);
-std::function<void(ATPContext *, char const *, va_list)> _log_doit2_context(const char* func_name, int level);
-std::function<void(ATPSocket *, char const *, va_list)> _log_doit2_socket(const char* func_name, int level);
+struct _log_doit2{
+    operator std::function<void(ATPSocket *, char const *, va_list)> () const{
+        return [&](ATPSocket * x, char const * fmt, va_list va){
+            _log_doit1(x, func_name, level, fmt, va);
+        };
+    }
+    operator std::function<void(ATPContext *, char const *, va_list)> () const{
+        return [&](ATPContext * x, char const * fmt, va_list va){
+            _log_doit1(x, func_name, level, fmt, va);
+        };
+    }
+    _log_doit2(const char* f, int l) : func_name(f), level(l){
+
+    }
+    const char* func_name;
+    int level;
+};
 void log_fatal1(ATPSocket * socket, char const *fmt, ...);
 void log_debug1(ATPSocket * socket, char const *fmt, ...);
 void log_note1(ATPSocket * socket, char const *fmt, ...);
 void log_fatal1(ATPContext * context, char const *fmt, ...);
 void log_debug1(ATPContext * context, char const *fmt, ...);
 void log_note1(ATPContext * context, char const *fmt, ...);
-#define log_fatal2_socket _log_doit2_socket(__FUNCTION__, LOGLEVEL_FATAL)
-#define log_debug2_socket _log_doit2_socket(__FUNCTION__, LOGLEVEL_DEBUG)
-#define log_note2_socket _log_doit2_socket(__FUNCTION__, LOGLEVEL_NOTE)
-#define log_fatal2_context _log_doit2_context(__FUNCTION__, LOGLEVEL_FATAL)
-#define log_debug2_context _log_doit2_context(__FUNCTION__, LOGLEVEL_DEBUG)
-#define log_note2_context _log_doit2_context(__FUNCTION__, LOGLEVEL_NOTE)
+void log_fatal2(std::function<void(ATPSocket *, char const *, va_list)> f, ATPSocket * socket, char const *fmt, ...);
+void log_debug2(std::function<void(ATPSocket *, char const *, va_list)> f, ATPSocket * socket, char const *fmt, ...);
+void log_note2(std::function<void(ATPSocket *, char const *, va_list)> f, ATPSocket * socket, char const *fmt, ...);
+void log_fatal2(std::function<void(ATPContext *, char const *, va_list)> f, ATPContext * context, char const *fmt, ...);
+void log_debug2(std::function<void(ATPContext *, char const *, va_list)> f, ATPContext * context, char const *fmt, ...);
+void log_note2(std::function<void(ATPContext *, char const *, va_list)> f, ATPContext * context, char const *fmt, ...);
+#define _log_fatal2(s, f, ...) log_fatal2(_log_doit2(__FUNCTION__, LOGLEVEL_FATAL), s, f, ##__VA_ARGS__)
+#define _log_debug2(s, f,...) log_debug2(_log_doit2(__FUNCTION__, LOGLEVEL_DEBUG), s, f, ##__VA_ARGS__)
+#define _log_note2(s, f, ...) log_note2(_log_doit2(__FUNCTION__, LOGLEVEL_NOTE), s, f, ##__VA_ARGS__)
+// #define _log_fatal2(...) log_fatal2(_log_doit2(__FUNCTION__, LOGLEVEL_FATAL), __VA_ARGS__)
+// #define _log_debug2(...) log_debug2(_log_doit2(__FUNCTION__, LOGLEVEL_DEBUG), __VA_ARGS__)
+// #define _log_note2(...) log_note2(_log_doit2(__FUNCTION__, LOGLEVEL_NOTE), __VA_ARGS__)
+#define USE_DARK_MAGIC
+#if defined USE_DARK_MAGIC
+#define log_fatal _log_fatal2
+#define log_debug _log_debug2
+#define log_note _log_note2
+#else
+#define log_fatal log_fatal1
+#define log_debug log_debug1
+#define log_note log_note1
+#endif
 
 #define SA struct sockaddr
 
@@ -105,36 +126,8 @@ struct PACKED_ATTRIBUTE ATPPacket{
 
 };
 
-enum CONN_STATE_ENUM {
-    CS_UNINITIALIZED = 0,
-    CS_IDLE,
 
-    CS_LISTEN,
-    CS_SYN_SENT,
-    CS_SYN_RECV,
-    CS_RESET,
-
-    CS_CONNECTED,
-    CS_CONNECTED_FULL,
-
-    CS_FIN_WAIT_1, // A
-
-    // this is half cloded state. B got A's is fin, and will not send data.
-    // But B can still send data, then A can send ack in response
-    CS_CLOSE_WAIT, // B
-
-    // A get ack of his fin
-    CS_FIN_WAIT_2, // A
-
-    // B sent his fin
-    CS_LAST_ACK, // B
-    // the end of side A, wait 2 * MSL and then goto CS_DESTROY
-    CS_TIME_WAIT,
-    // the end of side B
-    CS_DESTROY,
-
-    CS_STATE_COUNT
-};
+extern const char * CONN_STATE_STRS [];
 
 struct ATPAddrHandle{
     // apt addr layout, trivial
@@ -287,6 +280,9 @@ struct ATPSocket{
     uint32_t cur_window_packets = 0; 
     // this is byte-wise, in-flight packets + needing to be re-sent packets
     size_t cur_window = 0;
+    
+    atp_callback_func * callbacks[ATP_CALLBACK_SIZE];
+
 
     ~ATPSocket(){
 
@@ -304,6 +300,8 @@ struct ATPSocket{
                 this,
                 method,
                 0, nullptr, 
+                conn_state,
+                true, true, // writable; readable;
                 (const SA*)&(addr.sa),
                 sizeof(sockaddr_in)
             };
@@ -313,6 +311,8 @@ struct ATPSocket{
                 this,
                 method,
                 out_pkt->length, out_pkt->data, 
+                conn_state,
+                true, true, // writable; readable;
                 (const SA*)&(addr.sa),
                 sizeof(sockaddr_in)
             };
@@ -339,9 +339,6 @@ struct ATPSocket{
     }
 
     // INTERFACES
-    static const int perf_norm = 1;
-    static const int perf_drop = 2;
-    static const int perf_cache = 3;
     void clear(){
 
     }
@@ -353,18 +350,18 @@ struct ATPSocket{
     int bind(const ATPAddrHandle & to_addr);
     // passive connect
     int accept(const ATPAddrHandle & to_addr, OutgoingPacket * recv_pkt);
-    int receive(char * buffer, size_t len){
-        return 0;
-    }
-    // when a ack packet comes, update ack_nr
-    int update_ack(OutgoingPacket * recv_pkt);
+    int receive(OutgoingPacket * recv_pkt);
     // `send_packet` will take over possession of `out_pkt`
     int send_packet(OutgoingPacket * out_pkt);
-    int close();
+    ATP_PROC_RESULT close();
     void add_data(OutgoingPacket * out_pkt, const void * buf, const size_t len);
     int write(const void * buf, const size_t len);
-    int ATPSocket::process_packet(OutgoingPacket * recv_pkt);
-    int process(const ATPAddrHandle & addr, const char * buffer, size_t len);
+    // handles FIN, when a ack packet comes, update ack_nr
+    ATP_PROC_RESULT check_fin(OutgoingPacket * recv_pkt);
+    // handles ACK, when a ack packet comes, update ack_nr
+    ATP_PROC_RESULT update_myack(OutgoingPacket * recv_pkt);
+    ATP_PROC_RESULT process(const ATPAddrHandle & addr, const char * buffer, size_t len);
+    ATP_PROC_RESULT invoke_callback(int callback_type, atp_callback_arguments * args);
     const char * hash_code() {
         return ATPSocket::make_hash_code(sock_id, dest_addr);
     }
@@ -393,23 +390,9 @@ struct ATPContext{
         listen_sockets.clear();
     }
     void init(){
-        memset(callbacks, 0, sizeof callbacks);
-        callbacks[ATP_CALL_ON_ACCEPT] = atp_default_on_accept;
-        callbacks[ATP_CALL_ON_ERROR] = atp_default_on_error;
-        callbacks[ATP_CALL_ON_READ] = atp_default_on_read;
-        callbacks[ATP_CALL_ON_STATE_CHANGE] = atp_default_on_state_change;
-        callbacks[ATP_CALL_GET_READ_BUFFER_SIZE] = atp_default_get_read_buffer_size;
-        callbacks[ATP_CALL_GET_RANDOM] = atp_default_get_random;
-        callbacks[ATP_CALL_SENDTO] = atp_default_sendto;
-        callbacks[ATP_CALL_CONNECT] = atp_default_connect;
-        callbacks[ATP_CALL_BIND] = atp_default_bind;
-        callbacks[ATP_CALL_LOG] = atp_default_log;
-        callbacks[ATP_CALL_LOG_NORMAL] = atp_default_log_normal;
-        callbacks[ATP_CALL_LOG_DEBUG] = atp_default_log_debug;
-        callbacks[ATP_CALL_OPT_SENDBUF] = atp_default_opt_sndbuf;
-        callbacks[ATP_CALL_OPT_RECVBUF] = atp_default_opt_rcvbuf;
         clear();
-        std::srand(get_current_ms());
+        start_ms = get_current_ms();
+        std::srand(start_ms);
     }
 
     ATPContext(){
@@ -419,14 +402,14 @@ struct ATPContext{
         clear();
     }
 
-    atp_callback_func * callbacks[ATP_CALLBACK_SIZE];
-
     size_t opt_sndbuf;
     size_t opt_rcvbuf;
 
     std::vector<ATPSocket *> sockets;
     std::map<std::string, ATPSocket *> look_up;
     std::map<uint16_t, ATPSocket *> listen_sockets;
+
+    uint64_t start_ms;
 
     uint16_t new_sock_id(){
         return std::rand();
@@ -437,3 +420,6 @@ inline ATPContext & get_context(){
     static ATPContext context;
     return context;
 }
+
+
+void print_out(ATPSocket * socket, OutgoingPacket * out_pkt, const char * method);

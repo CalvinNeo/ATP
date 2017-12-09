@@ -5,6 +5,14 @@
 
 #define MAXLINE 4096
 
+ATP_PROC_RESULT data_arrived(atp_callback_arguments * args){
+    atp_socket * socket = args->socket;
+    size_t length = args->length; 
+    const char * data = args->data;
+    printf("data arrived: %s\n", data);
+    return ATP_PROC_OK;
+}
+
 int main(){
     uint16_t serv_port = 9876;
     struct sockaddr_in cli_addr; socklen_t cli_len = sizeof(cli_addr);
@@ -16,6 +24,7 @@ int main(){
 
     atp_context * context = atp_init();
     atp_socket * socket = atp_create_socket(context);
+    atp_set_callback(socket, ATP_CALL_ON_RECV, data_arrived);
 
     srv_addr = make_socketaddr_in(AF_INET, nullptr, serv_port);
 
@@ -23,17 +32,18 @@ int main(){
         err_sys("bind error");
 
     atp_listen(socket, serv_port);
+    atp_accept(socket);
 
     while (true) {
         sockaddr * pcli_addr = (SA *)&cli_addr;
 
         if ((n = recvfrom(socket->sockfd, msg, MAXLINE, 0, pcli_addr, &cli_len)) < 0)
             err_sys("recvfrom error");
-        ATPAddrHandle handle((const SA *)&cli_addr);
-        sockaddr_in * sai= (sockaddr_in *)pcli_addr;
-        // printf("====receive from %s port %d\n", inet_ntop(AF_INET, &(sai->sin_addr), ipaddr_str, INET_ADDRSTRLEN), ntohs(sai->sin_port));
-        atp_process_udp(context, socket->sockfd, msg, n, (const SA *)&cli_addr, cli_len);
+        ATP_PROC_RESULT result = atp_process_udp(context, socket->sockfd, msg, n, (const SA *)&cli_addr, cli_len);
+        if (result == ATP_PROC_FINISH)
+        {
+            break;
+        }
     }
-
     return 0;
 }

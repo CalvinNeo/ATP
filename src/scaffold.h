@@ -62,7 +62,7 @@ struct SizableCircularBuffer {
 
 inline uint64_t get_current_ms(){
     using namespace std::chrono;
-    time_point<system_clock,milliseconds> timepoint_now = time_point_cast<milliseconds>(system_clock::now());;
+    time_point<system_clock, milliseconds> timepoint_now = time_point_cast<milliseconds>(system_clock::now());;
     auto tmp = duration_cast<milliseconds>(timepoint_now.time_since_epoch());  
     std::time_t timestamp = tmp.count();  
     return (uint64_t)timestamp;  

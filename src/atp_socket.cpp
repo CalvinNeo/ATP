@@ -6,6 +6,22 @@ ATPSocket::ATPSocket(ATPContext * _context) : context(_context){
     sock_id = context->new_sock_id();
     conn_state = CS_UNINITIALIZED;
     memset(hash_str, 0, sizeof hash_str);
+
+    memset(callbacks, 0, sizeof callbacks);
+    callbacks[ATP_CALL_ON_ACCEPT] = atp_default_on_accept;
+    callbacks[ATP_CALL_ON_ERROR] = atp_default_on_error; 
+    callbacks[ATP_CALL_ON_RECV] = atp_default_on_recv;
+    callbacks[ATP_CALL_ON_PEERCLOSE] = atp_default_on_peerclose;
+    callbacks[ATP_CALL_ON_DESTROY] = atp_default_on_destroy;
+    callbacks[ATP_CALL_ON_STATE_CHANGE] = atp_default_on_state_change;
+    callbacks[ATP_CALL_GET_READ_BUFFER_SIZE] = atp_default_get_read_buffer_size;
+    callbacks[ATP_CALL_GET_RANDOM] = atp_default_get_random;
+    callbacks[ATP_CALL_SENDTO] = atp_default_sendto;
+    callbacks[ATP_CALL_CONNECT] = atp_default_connect;
+    callbacks[ATP_CALL_BIND] = atp_default_bind;
+    callbacks[ATP_CALL_LOG] = atp_default_log;
+    callbacks[ATP_CALL_LOG_NORMAL] = atp_default_log_normal;
+    callbacks[ATP_CALL_LOG_DEBUG] = atp_default_log_debug;
 }
 
 void ATPSocket::register_to_look_up(){
@@ -23,7 +39,7 @@ int ATPSocket::init(int family, int type, int protocol){
     sockfd = socket(family, type, protocol);
     get_src_addr().family() = family;
     dest_addr.family() = family;
-    #if defined (ATP_LOG) && ATP_LOG >= LOGLEVEL_DEBUG
+    #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
         log_debug(this, "UDP Socket init, sockfd %d.", sockfd);
     #endif
     return sockfd;
@@ -45,17 +61,16 @@ int ATPSocket::connect(const ATPAddrHandle & to_addr){
 
     // before sending packet, users can do something, like call `connect` to their UDP socket.
     atp_callback_arguments arg = make_atp_callback_arguments(ATP_CALL_CONNECT, out_pkt, dest_addr);
+    int result = invoke_callback(ATP_CALL_CONNECT, &arg);
 
-    int result = context->callbacks[ATP_CALL_CONNECT](&arg);
-
-    #if defined (ATP_LOG) && ATP_LOG >= LOGLEVEL_DEBUG
-        log_debug(this, "UDP socket connect to %s. Abort sending SYN.", dest_addr.to_string());
+    #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
+        log_debug(this, "UDP socket connect to %s.", dest_addr.to_string());
     #endif
     if (result != 0){
 
     } else{
         result = send_packet(out_pkt);
-        #if defined (ATP_LOG) && ATP_LOG >= LOGLEVEL_DEBUG
+        #if defined (ATP_LOG_AT_DEBUG)
             log_debug(this, "Sent SYN to peer, seq:%u.", out_pkt -> get_head() -> seq_nr);
         #endif
     }
@@ -68,7 +83,7 @@ int ATPSocket::listen(uint16_t host_port){
     // register to listen
     get_src_addr().set_port(host_port);
     context->listen_sockets[host_port] = this;
-    #if defined (ATP_LOG) && ATP_LOG >= LOGLEVEL_DEBUG
+    #if defined (ATP_LOG_AT_DEBUG)
         log_debug(this, "Listening port %u.", host_port);
     #endif
     return 0;
@@ -77,7 +92,7 @@ int ATPSocket::listen(uint16_t host_port){
 int ATPSocket::bind(const ATPAddrHandle & to_addr){
     // there's no OutgoingPacket to be sent, so pass `nullptr`
     atp_callback_arguments arg = make_atp_callback_arguments(ATP_CALL_BIND, nullptr, to_addr);
-    int result = context->callbacks[ATP_CALL_BIND](&arg);
+    int result = invoke_callback(ATP_CALL_BIND, &arg);
     return result;
 }
 
@@ -97,7 +112,7 @@ int ATPSocket::accept(const ATPAddrHandle & to_addr, OutgoingPacket * recv_pkt){
     add_data(out_pkt, &sock_id, sizeof(sock_id));
     int result = send_packet(out_pkt);
 
-    #if defined (ATP_LOG) && ATP_LOG >= LOGLEVEL_DEBUG
+    #if defined (ATP_LOG_AT_DEBUG)
         log_debug(this, "Accept SYN request from %s by sending SYN+ACK."
             , ATPSocket::make_hash_code(peer_sock_id, dest_addr));
     #endif
@@ -105,92 +120,25 @@ int ATPSocket::accept(const ATPAddrHandle & to_addr, OutgoingPacket * recv_pkt){
     return result;
 }
 
-int ATPSocket::update_ack(OutgoingPacket * recv_pkt){
-    if(conn_state < CS_CONNECTED){
-        // handles the last hand-shake of connection establishment
-
-        #if defined (ATP_LOG) && ATP_LOG >= LOGLEVEL_DEBUG
-            log_debug(this, "Connection established on B's side, handshake completed.");
-        #endif
-        conn_state = CS_CONNECTED;
-    }
-    int action = perf_norm;
-    uint16_t peer_seq = recv_pkt->get_head()->seq_nr;
-    if (peer_seq <= ack_nr){
-        // this packet has already been acked, DROP!
-        #if defined (ATP_LOG) && ATP_LOG >= LOGLEVEL_DEBUG
-            log_debug(this, "Ack repeated and drop, my ack:%u.", ack_nr);
-        #endif
-        action = perf_drop;
-    } else if(peer_seq == ack_nr + 1){
-        #if defined (ATP_LOG) && ATP_LOG >= LOGLEVEL_DEBUG
-            log_debug(this, "Ack normally, my ack:%u.", ack_nr);
-        #endif
-        ack_nr ++;
-        action = perf_norm;
-    } else{
-        // there is at least one packet not acked before this packet, so we can't ack this
-        #if defined (ATP_LOG) && ATP_LOG >= LOGLEVEL_DEBUG
-            log_debug(this, "Peer sent seq:%u, But my ack:%u.", peer_seq, ack_nr);
-        #endif
-        action = perf_cache;
-    }
-    if (action == perf_norm)
+ATP_PROC_RESULT ATPSocket::receive(OutgoingPacket * recv_pkt){
+    if (recv_pkt->get_head()->get_fin())
     {
-        switch(conn_state){
-            case CS_UNINITIALIZED:
-            case CS_IDLE:
-                err_sys("conn_state error");
-                goto ERROR;
-            case CS_SYN_SENT:
-                // altrady handled in `ATPSocket::process`
-                err_sys("conn_state error");
-                goto ERROR;
-            case CS_SYN_RECV:
-                // recv the last handshake, change state to CS_CONNECTED by update_ack automaticlly
-                // connection established on side B
-                // fallthrough
-            case CS_CONNECTED:
-            case CS_CONNECTED_FULL:
-                goto CHECK;
-            case CS_FIN_WAIT_1: // A
-                // state: A's fin is sent to B. this ack must be an ack for A's fin, 
-                // if will not be a ack for previous ack, because in this case `action != perf_norm`
-                // action of ack: 
-                conn_state = CS_FIN_WAIT_2;
-                goto CHECK;
-            case CS_CLOSE_WAIT: // B
-                // state: this is half cloded state. B got A's fin, and knew A'll not send data.
-                // But B can still send data, then A can send ack in response
-                // action of ack: check that ack, because it may be an ack for B's data
-                goto CHECK;
-            case CS_FIN_WAIT_2: // A
-                // state: A is fin now, and B knew A's fin. A can't send any data.
-                // action of ack: discard this ack
-                goto DISCARD; 
-            case CS_LAST_ACK: // B
-                // state: B has sent his fin, this ack must be A's response for B's fin
-                // action of ack: change state
-                conn_state = CS_DESTROY;
-                goto CHECK;
-            case CS_TIME_WAIT: 
-                // state, A must wait 2 * MSL and then goto CS_DESTROY
-                // action of ack: simply drop
-                goto DISCARD; 
-            case CS_RESET:
-            case CS_DESTROY: 
-                // the end
-                goto DISCARD; 
-            default:
-                goto DISCARD; 
-        }
+        // cond2: ignore fin
+        // just ignore
+        return ATP_PROC_OK;
+    }else if(recv_pkt->get_head()->get_syn()){
+        // the 2 bytes payload in syn packet are not user data, they carried sock_id
+        return ATP_PROC_OK;
+    }else if(recv_pkt->payload == 0){
+        // there is payload
+        // just ignore
+        return ATP_PROC_OK;
+    }else{
+        atp_callback_arguments arg = make_atp_callback_arguments(ATP_CALL_ON_RECV, recv_pkt, dest_addr);
+        arg.data = recv_pkt->data + sizeof(ATPPacket);
+        arg.length = recv_pkt->payload;
+        return invoke_callback(ATP_CALL_ON_RECV, &arg);
     }
-CHECK:
-    return action;
-ERROR:
-    return perf_drop;
-DISCARD:
-    return perf_drop;
 }
 
 int ATPSocket::send_packet(OutgoingPacket * out_pkt){
@@ -206,15 +154,22 @@ int ATPSocket::send_packet(OutgoingPacket * out_pkt){
 
     out_pkt->timestamp = get_current_ms();
     out_pkt->transmissions++;
-    #if defined (ATP_LOG) && ATP_LOG >= LOGLEVEL_DEBUG
+    #if defined (ATP_LOG_AT_DEBUG)
         log_debug(this, "ATPPacket sent. seq:%u size:%u payload:%u", out_pkt->get_head()->seq_nr, out_pkt->length, out_pkt->payload);
+    #endif
+
+    #if defined (ATP_LOG_AT_NOTE)
+        print_out(this, out_pkt, "snd");
     #endif
 
     // udp send
     atp_callback_arguments arg = make_atp_callback_arguments(ATP_CALL_SENDTO, out_pkt, dest_addr);
-    int result = context->callbacks[ATP_CALL_SENDTO](&arg);
 
-    log_debug(this, "UDP Send %u bytes.", result);
+    int result = invoke_callback(ATP_CALL_SENDTO, &arg);
+
+    #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
+        log_debug(this, "UDP Send %u bytes.", result);
+    #endif
     if (result != out_pkt->length){
 
     } else{
@@ -223,38 +178,69 @@ int ATPSocket::send_packet(OutgoingPacket * out_pkt){
     return result;
 }
 
-int ATPSocket::close(){
-    int result = 0;
-    OutgoingPacket * out_pkt;
+ATP_PROC_RESULT ATPSocket::close(){
+    int result = ATP_PROC_OK;
     switch(conn_state){
         case CS_UNINITIALIZED:
         case CS_IDLE:
         case CS_SYN_SENT:
         case CS_SYN_RECV:
-            err_sys("conn_state error");
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Close: Connection Error.");
+            #endif
+            result = ATP_PROC_ERROR;
             break;
         case CS_CONNECTED:
         case CS_CONNECTED_FULL:
+        {
             // A
-            out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_FIN));
-            result = send_packet(out_pkt);
+            conn_state = CS_FIN_WAIT_1;
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Close: Send FIN Packet.");
+            #endif
+            OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_FIN));
+            send_packet(out_pkt);
+            result = ATP_PROC_OK;
             break;
+        }
         case CS_FIN_WAIT_1:
-            err_sys("conn_state error");
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Close: Already sent FIN, waiting for ACK.");
+            #endif
+            result = ATP_PROC_ERROR;
             break;
         case CS_CLOSE_WAIT:
+        {
             // B
-            out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_FIN));
-            result = send_packet(out_pkt);
+            conn_state = CS_LAST_ACK;
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Close: Send FIN Packet to a finished peer.");
+            #endif
+            OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_FIN));
+            send_packet(out_pkt);
+            result = ATP_PROC_OK;
             break;
+        }
         case CS_FIN_WAIT_2:
         case CS_LAST_ACK:
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Close: Connection Error.");
+            #endif
+            result = ATP_PROC_ERROR;
+            break;
         case CS_TIME_WAIT:
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Close: Send a repeated last ACK.");
+            #endif
+            result = ATP_PROC_OK;
+            break;
         case CS_RESET:
         case CS_DESTROY:
-            err_sys("conn_state error");
-            break;
         default:
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Close: Connection Error.");
+            #endif
+            result = ATP_PROC_ERROR;
             break;
     }
     return result;
@@ -272,58 +258,191 @@ int ATPSocket::write(const void * buf, const size_t len){
     OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
     add_data(out_pkt, buf, len);
 
-    #if defined (ATP_LOG) && ATP_LOG >= LOGLEVEL_DEBUG
+    #if defined (ATP_LOG_AT_DEBUG)
         log_debug(this, "Write %u bytes to peer, seq:%u.", out_pkt->payload, seq_nr);
     #endif
 
     return send_packet(out_pkt);
 }
 
-int ATPSocket::process_packet(OutgoingPacket * recv_pkt){
-    ATPPacket * pkt = recv_pkt->get_head();
-    if(pkt->get_ack()){
-        // already handled
+ATP_PROC_RESULT ATPSocket::check_fin(OutgoingPacket * recv_pkt){
+    // return >0: OK
+    // return -1: error
+    ATP_PROC_RESULT result = ATP_PROC_OK;
+    switch(conn_state){
+        case CS_UNINITIALIZED:
+        case CS_IDLE:
+        case CS_SYN_SENT:
+        case CS_SYN_RECV:
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Connection Error.");
+            #endif
+            result = ATP_PROC_ERROR;
+            break;
+        case CS_CONNECTED:
+        case CS_CONNECTED_FULL: // B
+        {
+            conn_state = CS_CLOSE_WAIT;
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Recv peer's FIN, Send the last ACK to Peer, Me still alive.");
+            #endif
+            OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
+            send_packet(out_pkt);
+
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Call ATP_CALL_ON_PEERCLOSE.");
+            #endif
+            atp_callback_arguments arg = make_atp_callback_arguments(ATP_CALL_ON_PEERCLOSE, recv_pkt, dest_addr);
+            result = invoke_callback(ATP_CALL_ON_PEERCLOSE, &arg);
+            // half closed, don't send FIN immediately
+            break;
+        }
+        case CS_FIN_WAIT_1: // A
+        case CS_CLOSE_WAIT: // B
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Connection Error.");
+            #endif
+            result = ATP_PROC_ERROR;
+            break;
+        case CS_FIN_WAIT_2: // A
+        {
+            conn_state = CS_TIME_WAIT;
+
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Recv peer's FIN, Send the last ACK to Peer, wait 2MSL.");
+            #endif
+            OutgoingPacket *  out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
+            result = send_packet(out_pkt);
+
+            atp_callback_arguments arg;
+            // arg = make_atp_callback_arguments(ATP_CALL_ON_PEERCLOSE, recv_pkt, dest_addr);
+            // result = context->callbacks[ATP_CALL_ON_PEERCLOSE](&arg);
+            // TODO do not destroy immediately
+            arg = make_atp_callback_arguments(ATP_CALL_ON_DESTROY, recv_pkt, dest_addr);
+            result = invoke_callback(ATP_CALL_ON_DESTROY, &arg);
+            break;
+        }
+        case CS_LAST_ACK: // B
+        case CS_TIME_WAIT: // A
+        case CS_RESET:
+        case CS_DESTROY:
+        default:
+        {
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Connection Error.");
+            #endif
+            result = ATP_PROC_ERROR;
+            break;
+        }
     }
-    if (pkt->get_fin())
+    return result;
+}
+
+ATP_PROC_RESULT ATPSocket::update_myack(OutgoingPacket * recv_pkt){
+    if(conn_state < CS_CONNECTED){
+        // handles the last hand-shake of connection establishment
+
+        #if defined (ATP_LOG_AT_DEBUG)
+            log_debug(this, "Connection established on B's side, handshake completed.");
+        #endif
+        conn_state = CS_CONNECTED;
+    }
+    ATP_PROC_RESULT action = ATP_PROC_OK;
+    uint16_t peer_seq = recv_pkt->get_head()->seq_nr;
+    if (peer_seq <= ack_nr){
+        // this packet has already been acked, DROP!
+        #if defined (ATP_LOG_AT_DEBUG)
+            log_debug(this, "This is an old seq_nr:%u, my ack has already been:%u.", peer_seq, ack_nr);
+        #endif
+        action = ATP_PROC_DROP;
+    } else if(peer_seq == ack_nr + 1){
+        #if defined (ATP_LOG_AT_DEBUG)
+            log_debug(this, "This is a normal seq_nr:%u, my ack is:%u.", peer_seq, ack_nr);
+        #endif
+        #if defined (ATP_LOG_AT_NOTE)
+            print_out(this, recv_pkt, "rcv");
+        #endif
+        ack_nr ++;
+        action = ATP_PROC_OK;
+    } else{
+        // there is at least one packet not acked before this packet, so we can't ack this
+        #if defined (ATP_LOG_AT_DEBUG)
+            log_debug(this, "This is an pre-arrived seq_nr:%u, my ack is still:%u.", peer_seq, ack_nr);
+        #endif
+        action = ATP_PROC_CACHE;
+    }
+    if (action == ATP_PROC_OK)
     {
         switch(conn_state){
             case CS_UNINITIALIZED:
             case CS_IDLE:
-            case CS_SYN_SENT:
-            case CS_SYN_RECV:
-                err_sys("conn_state error");
+            case CS_LISTEN:
+                err_sys("At state CS_UNINITIALIZED/CS_IDLE/CS_LISTEN: Ack is illegal");
+                action = ATP_PROC_DROP;
                 break;
+            case CS_SYN_SENT:
+                // already handled in `ATPSocket::process`
+                err_sys("At state CS_SYN_SENT: this case is already handled in ATPSocket::process");
+                action = ATP_PROC_DROP;
+                break;
+            case CS_SYN_RECV:
+                // recv the last handshake, change state to CS_CONNECTED by update_myack automaticlly
+                // connection established on side B
+                // fallthrough
             case CS_CONNECTED:
             case CS_CONNECTED_FULL:
-                conn_state = CS_CLOSE_WAIT;
-                // half connect, don't send FIN immediately
                 break;
             case CS_FIN_WAIT_1: // A
+                // state: A's fin is sent to B. this ack must be an ack for A's fin, 
+                // if will not be a ack for previous ack, because in this case `action != ATP_PROC_OK`
+                // action of ack: 
+                conn_state = CS_FIN_WAIT_2;
+                #if defined (ATP_LOG_AT_DEBUG)
+                    log_debug(this, "Recv the ACK for my FIN from Peer, Me Die, Peer still alive.");
+                #endif
+                break;
             case CS_CLOSE_WAIT: // B
-                err_sys("conn_state error");
+                // state: this is half closed state. B got A's fin and sent Ack, 
+                // Now, B knew A'll not send data, but B can still send data, then A can send ack in response
+                // action of ack: check that ack, because it may be an ack for B's data
                 break;
             case CS_FIN_WAIT_2: // A
-                conn_state = CS_TIME_WAIT;
+                // state: A is fin now, and B knew A's fin and A can't send any data bt sending Ack
+                // A got B's Ack, and already switch from CS_FIN_WAIT_1 to CS_FIN_WAIT_2
+                // THis should be B's FIN or B's Data
+                // action of ack: discard this ack
                 break;
             case CS_LAST_ACK: // B
-            case CS_TIME_WAIT: // A
+            {
+                // state: B has sent his fin, this ack must be A's response for B's fin
+                // action of ack: change state
+                atp_callback_arguments arg = make_atp_callback_arguments(ATP_CALL_ON_DESTROY, nullptr, dest_addr);
+                action = invoke_callback(ATP_CALL_ON_DESTROY, &arg);
+                conn_state = CS_DESTROY;
+                #if defined (ATP_LOG_AT_DEBUG)
+                    log_debug(this, "Recv the last ACK for my FIN from Peer, All Die, RIP.");
+                #endif
+                break;
+            }
+            case CS_TIME_WAIT: 
+                // state, A must wait 2 * MSL and then goto CS_DESTROY
+                // action of ack: simply drop
+                action = ATP_PROC_DROP;
+                break;
             case CS_RESET:
-            case CS_DESTROY:
-                err_sys("conn_state error");
+            case CS_DESTROY: 
+                // the end
+                action = ATP_PROC_DROP;
                 break;
             default:
+                action = ATP_PROC_DROP;
                 break;
         }
     }
-    if (recv_pkt->payload > 0)
-    {
-        // if there's payload
-        this->receive(recv_pkt->data, recv_pkt->length);
-    }
-    return 0;
+    return action;
 }
 
-int ATPSocket::process(const ATPAddrHandle & addr, const char * buffer, size_t len){
+ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buffer, size_t len){
     OutgoingPacket * recv_pkt = new OutgoingPacket();
     // set OutgoingPacket
     // must copy received message from "kernel"
@@ -334,11 +453,12 @@ int ATPSocket::process(const ATPAddrHandle & addr, const char * buffer, size_t l
     recv_pkt->length = len;
     recv_pkt->payload = recv_pkt->length - sizeof(ATPPacket);
 
-    #if defined (ATP_LOG) && ATP_LOG >= LOGLEVEL_DEBUG
+    #if defined (ATP_LOG_AT_DEBUG)
         log_debug(this, "ATPPacket recv, my_ack:%u peer_seq:%u peer_ack:%u size:%u payload:%u."
             , ack_nr, recv_pkt->get_head()->seq_nr, recv_pkt->get_head()->ack_nr, recv_pkt->length, recv_pkt->payload);
     #endif
-
+    ATP_PROC_RESULT result = ATP_PROC_OK;
+    // HANDLE IMMEDIATELY
     // SYN packet need to be handled immediately, and `addr` must register to `dest_addr` by `accept`
     // on the other hand, if we handle SYN from a queue, in `process_packet`
     // then we can't know `socket->dest_addr`
@@ -351,61 +471,107 @@ int ATPSocket::process(const ATPAddrHandle & addr, const char * buffer, size_t l
         peer_sock_id = *reinterpret_cast<uint16_t *>(recv_pkt->data + sizeof(ATPPacket));
         // must set ack_nr, because now ack_nr is still 0
         ack_nr = recv_pkt->get_head()->seq_nr;
-        #if defined (ATP_LOG) && ATP_LOG >= LOGLEVEL_DEBUG
+        #if defined (ATP_LOG_AT_DEBUG)
             log_debug(this, "Connection established on A's side, sending ACK immediately to B to complete handshake.");
         #endif
-        process_packet(recv_pkt);
+
+        #if defined (ATP_LOG_AT_NOTE)
+            print_out(this, recv_pkt, "rcv");
+        #endif
         // send a ack even if there's no data immediately, in order to avoid timeout
         OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
-        return send_packet(out_pkt);
+        send_packet(out_pkt);
+        result = ATP_PROC_OK;
+        return result;
 
     } else if(pkt->get_syn()){
         // recv the first handshake
         // send the second handshake
+        #if defined (ATP_LOG_AT_NOTE) 
+            print_out(this, recv_pkt, "rcv");
+        #endif
         this->accept(addr, recv_pkt);
-        return process_packet(recv_pkt);
+        result = ATP_PROC_OK;
+        return result;
+    } 
+
+    int action = update_myack(recv_pkt);
+    if (action == ATP_PROC_FINISH)
+    {
+        return action;
     }
-    int action = update_ack(recv_pkt);
+    if (pkt->get_fin())
+    {
+        result = check_fin(recv_pkt);
+        return result;
+    }
+
     switch(action){
-        case perf_drop:
-            #if defined (ATP_LOG) && ATP_LOG >= LOGLEVEL_DEBUG
-                log_debug(this, "Drop packet, ack:%u peer_seq:%u", ack_nr, recv_pkt->get_head()->seq_nr);
+        case ATP_PROC_DROP:
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Drop packet, peer_seq:%u, my ack:%u", recv_pkt->get_head()->seq_nr, ack_nr);
+            #endif
+            #if defined (ATP_LOG_AT_NOTE)
+                print_out(this, recv_pkt, "drop");
             #endif
             delete recv_pkt;
+            result = ATP_PROC_OK;
             break;
-        case perf_norm:
-            return process_packet(recv_pkt);
+        case ATP_PROC_OK:
+            result = this->receive(recv_pkt);
             break;
-        case perf_cache:
-            #if defined (ATP_LOG) && ATP_LOG >= LOGLEVEL_DEBUG
-                log_debug(this, "Cached packet, ack:%u peer seq:%u inbuf size: %u", ack_nr, recv_pkt->get_head()->seq_nr, inbuf.size());
+        case ATP_PROC_CACHE:
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Cached packet, ack:%u peer seq:%u inbuf_size: %u", ack_nr, recv_pkt->get_head()->seq_nr, inbuf.size());
             #endif
             inbuf.push(recv_pkt);
+            result = ATP_PROC_OK;
             break;
     }
-    if (action == perf_norm)
+    if (action == ATP_PROC_OK)
     {
         // check if there is any packet which can be acked
         while(!inbuf.empty()){
             OutgoingPacket * top_packet = inbuf.top();
-            action = update_ack(top_packet);
+            action = update_myack(top_packet);
             switch(action){
-                case perf_drop:
+                case ATP_PROC_DROP:
+                    #if defined (ATP_LOG_AT_DEBUG)
+                        log_debug(this, "Drop packet from cache, ack:%u peer_seq:%u", ack_nr, recv_pkt->get_head()->seq_nr);
+                    #endif
+                    #if defined (ATP_LOG_AT_NOTE)
+                        print_out(this, top_packet, "drop");
+                    #endif
                     delete top_packet;
+                    result = ATP_PROC_OK;
                     break;
-                case perf_norm:
+                case ATP_PROC_OK:
                     inbuf.pop();
-                    return process_packet(recv_pkt);
+                    #if defined (ATP_LOG_AT_DEBUG)
+                        log_debug(this, "Process a cached ATPPacket, peer_seq:%u, my ack:%u", recv_pkt->get_head()->seq_nr, ack_nr);
+                    #endif
+                    result = this->receive(recv_pkt);
                     break;
-                case perf_cache:
+                case ATP_PROC_CACHE:
                     // remain this state;
                     goto OUT_THE_LOOP;
+                    result = ATP_PROC_OK;
                     break;
             }
         }
         OUT_THE_LOOP:
             int aaa = 1;
     }
-    return 0;
+    return result;
 }
 
+ATP_PROC_RESULT ATPSocket::invoke_callback(int callback_type, atp_callback_arguments * args){
+    if (callbacks[callback_type] != nullptr)
+    {
+        return callbacks[callback_type](args);
+    }
+    #if defined (ATP_LOG_AT_DEBUG)
+        log_debug(this, "An empty callback");
+    #endif
+    return 0;
+}
