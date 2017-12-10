@@ -25,37 +25,30 @@ struct SizableCircularBuffer {
     SizableCircularBuffer(){
 
     }
-    SizableCircularBuffer(size_t origin_size){
-        if((origin_size & (origin_size - 1)) != 0){
-            size_t size = 1;
-            do size *= 2; while (origin_size > size);
-            origin_size = size;
-        }
-        elements.resize(origin_size);
+    SizableCircularBuffer(size_t atleast_size){
+        grow(atleast_size);
     }
     T get(size_t i) const { 
         return elements[i % size()].second; 
     }
     void put(size_t i, T data) { 
-        
+
     }
     void raw_put(size_t i, T data){
         elements[i % size()] = std::make_pair(i, data);
     }
     void grow(size_t atleast_size){
         // Figure out the new size.
-        // TODO make it effcient
-        std::vector<_Item> old_elements = elements;
-        size_t old_size = size();
-
-        size_t new_size = old_size;
-        do new_size *= 2; while (atleast_size >= new_size);
-        elements.resize(new_size, _Item{});
-
-        for(size_t i = 0; i < old_size; i++){
-            size_t seq = old_elements[i].first;
-            elements[seq % size()] = old_elements[i];
+        // let x === a (mod 2^m),
+        // need calculate b that x === b (mod 2^(m+1)), and we don't know x now.
+        if((atleast_size & (atleast_size - 1)) != 0){
+            size_t size = 1;
+            do size *= 2; while (atleast_size > size);
+            atleast_size = size;
         }
+
+        elements.resize(atleast_size, _Item{});
+
     }
     void ensure_size(size_t atleast_size) { 
         if (atleast_size > size()) 

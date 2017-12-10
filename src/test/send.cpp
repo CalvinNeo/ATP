@@ -2,14 +2,12 @@
 #include "../atp_impl.h"
 #include "../udp_util.h"
 
-#define MAXLINE 4096
-
 int main(){
     uint16_t serv_port = 9876;
-    struct sockaddr_in cli_addr;
+    struct sockaddr_in cli_addr; 
     struct sockaddr_in srv_addr; socklen_t srv_len = sizeof(srv_addr);
 
-    char msg[MAXLINE];
+    char msg[MAX_ATP_PACKET_PAYLOAD];
     char ipaddr_str[INET_ADDRSTRLEN];
     int n;
 
@@ -20,9 +18,18 @@ int main(){
     atp_connect(socket, (const SA *)&srv_addr, sizeof srv_addr);
 
 
-    while (fgets(msg, MAXLINE, stdin) != NULL) {
+    while (fgets(msg, MAX_ATP_PACKET_PAYLOAD, stdin) != NULL) {
         n = strlen(msg);
         atp_write(socket, msg, n);
+        sockaddr * psock_addr = (SA *)&srv_addr;
+
+        if ((n = recvfrom(socket->sockfd, msg, MAX_ATP_PACKET_PAYLOAD, 0, psock_addr, &srv_len)) < 0)
+            err_sys("recvfrom error");
+        ATP_PROC_RESULT result = atp_process_udp(context, socket->sockfd, msg, n, (const SA *)&srv_addr, srv_len);
+        if (result == ATP_PROC_FINISH)
+        {
+            break;
+        }
     }
     atp_close(socket);
     return 0;

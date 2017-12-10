@@ -3,8 +3,6 @@
 #include "../udp_util.h"
 #include <iostream>
 
-#define MAXLINE 4096
-
 ATP_PROC_RESULT data_arrived(atp_callback_arguments * args){
     atp_socket * socket = args->socket;
     size_t length = args->length; 
@@ -18,7 +16,7 @@ int main(){
     struct sockaddr_in cli_addr; socklen_t cli_len = sizeof(cli_addr);
     struct sockaddr_in srv_addr;
 
-    char msg[MAXLINE];
+    char msg[MAX_ATP_PACKET_PAYLOAD];
     char ipaddr_str[INET_ADDRSTRLEN];
     int n;
 
@@ -37,7 +35,7 @@ int main(){
     while (true) {
         sockaddr * pcli_addr = (SA *)&cli_addr;
 
-        if ((n = recvfrom(socket->sockfd, msg, MAXLINE, 0, pcli_addr, &cli_len)) < 0)
+        if ((n = recvfrom(socket->sockfd, msg, MAX_ATP_PACKET_PAYLOAD, 0, pcli_addr, &cli_len)) < 0)
             err_sys("recvfrom error");
         ATP_PROC_RESULT result = atp_process_udp(context, socket->sockfd, msg, n, (const SA *)&cli_addr, cli_len);
         if (result == ATP_PROC_FINISH)

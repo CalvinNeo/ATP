@@ -6,7 +6,7 @@ ATP is a naive TCP implementation based on UDP
 
 # Usage
 ## Requirements
-1. C++17 standard(e.g. G++5.4)
+1. C++17 standard(e.g. G++7.2)
 
 ## Build
 Make the project by command

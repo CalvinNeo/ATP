@@ -1,9 +1,6 @@
 #include "atp_impl.h"
 #include "udp_util.h"
 
-#define SYSCACHE_MAX 8192
-static char sys_cache[SYSCACHE_MAX];
-
 atp_context * atp_init(){
     get_context().init();
     return &get_context();
@@ -13,11 +10,11 @@ static void sys_loop(atp_socket * socket, std::function<int(atp_socket*)> predic
     while (true) {
         struct sockaddr_in peer_addr; socklen_t peer_len = sizeof(peer_addr);
         sockaddr * ppeer_addr = (SA *)&peer_addr;
-        int n = recvfrom(socket->sockfd, sys_cache, SYSCACHE_MAX, 0, ppeer_addr, &peer_len);
+        int n = recvfrom(socket->sockfd, socket->sys_cache, SYSCACHE_MAX, 0, ppeer_addr, &peer_len);
         if (n < 0)
             return -1;
         ATPAddrHandle handle_to((const SA *)&peer_addr);
-        socket->process(handle_to, sys_cache, n);
+        socket->process(handle_to, socket->sys_cache, n);
         if (predicate(socket) == 0)
         {
             return 0;
@@ -146,31 +143,5 @@ void atp_set_callback(atp_socket * socket, int callback_type, atp_callback_func 
 }
 
 int atp_eof(atp_socket * socket){
-    static const int readable = 0;
-    static const int eof = 1;
-    switch(socket->conn_state){
-        case CS_UNINITIALIZED:
-        case CS_IDLE:
-        case CS_SYN_SENT:
-        case CS_SYN_RECV:
-        case CS_CONNECTED:
-        case CS_CONNECTED_FULL: // B
-            return readable;
-        case CS_FIN_WAIT_1: // A
-            // can still read
-            return readable;
-        case CS_CLOSE_WAIT: // B
-            return eof;
-        case CS_FIN_WAIT_2: // A
-            return readable;
-        case CS_LAST_ACK: // B
-            // can still read
-            return eof;
-        case CS_TIME_WAIT: // A
-            return eof;
-        case CS_RESET:
-        case CS_DESTROY:
-        default:
-            return eof;
-    }
+    return socket->readable();
 }

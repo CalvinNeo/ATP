@@ -3,7 +3,6 @@
 #include "error.h"
 #include "scaffold.h"
 #include "atp_common.h"
-#include "atp.h"
 #include <cstdio>
 #include <string>
 #include <map>
@@ -13,26 +12,7 @@
 #include <algorithm>
 #include <functional>
 #include <queue>
-
-
-#define ETHERNET_MTU 1500
-#define IPV4_HEADER_SIZE 20
-#define IPV6_HEADER_SIZE 40
-#define UDP_HEADER_SIZE 8
-
-#define PACKETFLAG_FIN 0x1
-#define PACKETFLAG_SYN 0x2
-#define PACKETFLAG_RST 0x4
-#define PACKETFLAG_PSH 0x8
-#define PACKETFLAG_ACK 0x10
-#define PACKETFLAG_URG 0x20
-#define PACKETFLAG_MASK 0x3f
-
-#if defined __GNUC__
-    #define PACKED_ATTRIBUTE __attribute__((__packed__))
-#else
-    #define PACKED_ATTRIBUTE
-#endif
+#include <type_traits>
 
 #define LOGLEVEL_FATAL 1
 #define LOGLEVEL_NOTE 2
@@ -92,14 +72,16 @@ void log_note2(std::function<void(ATPContext *, char const *, va_list)> f, ATPCo
 
 #define SA struct sockaddr
 
-struct PACKED_ATTRIBUTE ATPPacket{
-    // apt packet layout, trivial
-    // strictly aligned to 4
+#define PACKETFLAG_FIN 0x1
+#define PACKETFLAG_SYN 0x2
+#define PACKETFLAG_RST 0x4
+#define PACKETFLAG_PSH 0x8
+#define PACKETFLAG_ACK 0x10
+#define PACKETFLAG_URG 0x20
+#define PACKETFLAG_MASK 0x3f
 
-    // seq_nr and ack_nr are now packet-wise rather than byte-wise
-    uint32_t seq_nr;
-    uint32_t ack_nr;
-    uint16_t peer_sock_id; uint16_t flags;
+struct PACKED_ATTRIBUTE ATPPacket : public CATPPacket{
+    // apt packet layout, trivial
 
 #define MAKE_FLAGS_GETTER_SETTER(fn, mn) void set_##fn(char fn){ \
         if(fn == 1) flags |= mn; else flags &= (~mn); \
@@ -126,11 +108,14 @@ struct PACKED_ATTRIBUTE ATPPacket{
 
 };
 
+static_assert(std::is_trivial<ATPPacket>::value, "ATPPacket is not trivial");
+static_assert(std::is_pod<ATPPacket>::value, "ATPPacket is not pod");
+static_assert(std::is_aggregate<ATPPacket>::value, "ATPPacket is not aggregate");
+static_assert(sizeof(ATPPacket) == 12, "ATPPacket's size is not equal to 12");
 
 extern const char * CONN_STATE_STRS [];
 
 struct ATPAddrHandle{
-    // apt addr layout, trivial
     ATPAddrHandle(){
         std::memset(&sa, 0, sizeof sa);
     }
@@ -165,11 +150,11 @@ struct ATPAddrHandle{
             err_sys("inet_pton error 0"); 
         set_port(_port);
     }
-    const char * to_string(){
+    const char * to_string() const{
         ::inet_ntop(sa.sin_family, &addr(), fmt, INET_ADDRSTRLEN);
         return const_cast<const char *>(fmt);
     }
-    const char * hash_code() {
+    const char * hash_code() const{
         std::sprintf(fmt, "%s:%05u", to_string(), host_port());
         return const_cast<const char *>(fmt);
     }
@@ -205,7 +190,7 @@ struct ATPAddrHandle{
     }
     struct sockaddr_in sa;
 private:
-    char fmt[INET_ADDRSTRLEN];
+    mutable char fmt[INET_ADDRSTRLEN];
 };
 
 struct OutgoingPacket{
@@ -287,10 +272,15 @@ struct ATPSocket{
     // the oldest un-acked packet in the send queue is seq_nr - cur_window_packets
     uint32_t cur_window_packets = 0; 
     // this is byte-wise, in-flight packets + needing to be re-sent packets
-    size_t cur_window = 0;
+    // initially set to MAX_ATP_PACKET_PAYLOAD, regardless of all above.
+    size_t cur_window = MAX_ATP_PACKET_PAYLOAD;
     
+    // determined by MTU
+    size_t current_max_packet_payload = MAX_ATP_PACKET_PAYLOAD;
+
     atp_callback_func * callbacks[ATP_CALLBACK_SIZE];
 
+    char sys_cache[SYSCACHE_MAX];
 
     ~ATPSocket(){
         clear();
@@ -298,51 +288,8 @@ struct ATPSocket{
     ATPSocket(ATPContext * _context);
     // HELPERS
     void register_to_look_up();
-
-    atp_callback_arguments make_atp_callback_arguments(int method, OutgoingPacket * out_pkt, const ATPAddrHandle & addr){
-        if(out_pkt == nullptr){
-            // there's no OutgoingPacket to be sent, so pass `nullptr`
-            // out_pkt->length = 0, out_pkt->data = nullptr
-            return atp_callback_arguments{
-                context,
-                this,
-                method,
-                0, nullptr, 
-                conn_state,
-                (const SA*)&(addr.sa),
-                sizeof(sockaddr_in)
-            };
-        }else{
-            return atp_callback_arguments{
-                context,
-                this,
-                method,
-                out_pkt->length, out_pkt->data, 
-                conn_state,
-                (const SA*)&(addr.sa),
-                sizeof(sockaddr_in)
-            };
-        }
-    }
-    OutgoingPacket * basic_send_packet(uint16_t flags){
-        ATPPacket pkt = ATPPacket{
-            seq_nr, //seq_nr
-            ack_nr, // ack_nr
-            peer_sock_id, // peer_sock_id
-            flags // flags
-        };
-        OutgoingPacket * out_pkt = new OutgoingPacket{
-            true,
-            sizeof (ATPPacket), // length, update by `add_data`
-            0, // payload, update by `add_data`
-            0, // timestamp, set at `send_packet`
-            0, // transmissions, update by `send_packet`
-            false, // need_resend, update by `send_packet`
-            reinterpret_cast<char *>(std::calloc(1, sizeof (ATPPacket))) // SYN packet will not contain data
-        };
-        std::memcpy(out_pkt->data, &pkt, sizeof (ATPPacket));
-        return out_pkt;
-    }
+    atp_callback_arguments make_atp_callback_arguments(int method, OutgoingPacket * out_pkt, const ATPAddrHandle & addr);
+    OutgoingPacket * basic_send_packet(uint16_t flags);
 
     // INTERFACES
     void clear(){
@@ -372,8 +319,16 @@ struct ATPSocket{
     // `send_packet` will take over possession of `out_pkt`
     ATP_PROC_RESULT send_packet(OutgoingPacket * out_pkt);
     ATP_PROC_RESULT close();
+    bool writable() const;
+    bool readable() const;
     void add_data(OutgoingPacket * out_pkt, const void * buf, const size_t len);
+    size_t bytes_can_send_once() const ;
+    size_t bytes_can_send_one_packet() const ;
+    bool is_full() const {return bytes_can_send_once() == 0;}
+    // this function returns immediately after the packet is sent(whether succeed or fail)
     ATP_PROC_RESULT write(const void * buf, const size_t len);
+    // this function returns only when got ack from peer
+    ATP_PROC_RESULT blocked_write(const void * buf, const size_t len);
     // handles FIN
     ATP_PROC_RESULT check_fin(OutgoingPacket * recv_pkt);
     // handles ACK, when a ack packet comes, update ack_nr
@@ -381,11 +336,13 @@ struct ATPSocket{
     ATP_PROC_RESULT process(const ATPAddrHandle & addr, const char * buffer, size_t len);
     ATP_PROC_RESULT invoke_callback(int callback_type, atp_callback_arguments * args);
     // update my_seq_acked_by_peer
-    ATP_PROC_RESULT do_ack_packet();
-    const char * hash_code() {
+    ATP_PROC_RESULT do_ack_packet(OutgoingPacket * recv_pkt);
+    void destroy(bool wait_2msl);
+    void check_timeout();
+    const char * hash_code() const{
         return ATPSocket::make_hash_code(sock_id, dest_addr);
     }
-    const char * to_string() {
+    const char * to_string() const{
         sprintf(hash_str, "[%05u](%s:%05u)->(%s:%05u) fd:%d", sock_id, get_src_addr().to_string(), get_src_addr().host_port()
             , dest_addr.to_string(), dest_addr.host_port(), sockfd);
         return const_cast<const char *>(hash_str);
@@ -396,7 +353,7 @@ struct ATPSocket{
         return const_cast<const char *>(hash_str);
     }
 private:
-    char hash_str[INET_ADDRSTRLEN * 2 + 5 * 2 + 10 * 3];
+    mutable char hash_str[INET_ADDRSTRLEN * 2 + 5 * 2 + 10 * 3];
 };
 
 

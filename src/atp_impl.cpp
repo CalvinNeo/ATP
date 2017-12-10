@@ -35,10 +35,10 @@ static std::string tabber(const std::string & src, bool tail_crlf) {
     return ans;
 }
 
-void _log_doit1(ATPSocket * socket, char const* func_name, int level, char const * fmt, va_list va){
+void _log_doit1(ATPSocket * socket, char const * func_name, int level, char const * fmt, va_list va){
     char new_fmt[1024];
-    std::snprintf(new_fmt, 1024, "[Socket %s] %s \n<err %d: %s> at func[%s] :\n\t%s\n"
-        , socket->to_string(), CONN_STATE_STRS[socket->conn_state], errno, strerror(errno), func_name, fmt);
+    std::snprintf(new_fmt, 1024, "[Socket %s] %s at func[%s] \n<syserr %d: %s>\n\t%s\n"
+        , socket->to_string(), CONN_STATE_STRS[socket->conn_state], func_name, errno, strerror(errno), fmt);
     char buf[4096];
     vsnprintf(buf, 4096, new_fmt, va);
     fflush(stdout);
@@ -57,7 +57,7 @@ void _log_doit1(ATPSocket * socket, char const* func_name, int level, char const
 }
 void _log_doit1(ATPContext * context, char const* func_name, int level, char const * fmt, va_list va){
     char new_fmt[1024];
-    std::snprintf(new_fmt, 1024, "[Context] <err %d: %s> at func[%s] :\n\t%s\n", errno, strerror(errno), func_name, fmt);
+    std::snprintf(new_fmt, 1024, "[Context] at func[%s] \n<syserr %d: %s>\n\t%s\n", func_name, errno, strerror(errno), fmt);
     char buf[4096];
     vsnprintf(buf, 4096, new_fmt, va);
     fflush(stdout);
@@ -110,8 +110,8 @@ void log_debug2(std::function<void(ATPContext *, char const *, va_list)> f, ATPC
 void log_note2(std::function<void(ATPContext *, char const *, va_list)> f, ATPContext * context, char const *fmt, ...){
     va_list va;
     va_start(va, fmt);
-    va_end(va);
     f(context, fmt, va);
+    va_end(va);
 }
 
 

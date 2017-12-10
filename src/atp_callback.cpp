@@ -1,17 +1,18 @@
 #include "atp_impl.h"
 #include "udp_util.h"
+
 void init_callbacks(ATPSocket * socket){
     socket->callbacks[ATP_CALL_ON_ERROR] = nullptr; 
     socket->callbacks[ATP_CALL_ON_PEERCLOSE] = [](atp_callback_arguments * args){
         atp_socket * socket = args->socket;
-        #if defined (ATP_LOG_AT_DEBUG)
+        #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
             log_debug(socket, "Finish myself immediately when recv FIN from peer.");
         #endif
         return socket->close();
     };
     socket->callbacks[ATP_CALL_ON_DESTROY] = [](atp_callback_arguments * args){
         atp_socket * socket = args->socket;
-        #if defined (ATP_LOG_AT_DEBUG)
+        #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
             log_debug(socket, "Destroy socket.");
         #endif
         return ATP_PROC_FINISH;
@@ -41,7 +42,9 @@ void init_callbacks(ATPSocket * socket){
         #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
             // const sockaddr_in * sk = (const sockaddr_in *)sa;
             ATPAddrHandle handle(sa);
-            log_debug(socket, "Call sendto port:%s .", handle.hash_code());
+            #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
+                log_debug(socket, "Call sendto :%s, UDP Send %u bytes.", handle.to_string(), args->addr_len);
+            #endif
         #endif
         if(n != args->length){
             return ATP_PROC_ERROR;

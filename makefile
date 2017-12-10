@@ -1,5 +1,5 @@
 CC = gcc
-CXX = g++
+CXX = g++-7
 
 CFLAGS=-w -DPOSIX -g -O0 -fpermissive -fPIC -std=c++1z $(NO_WARN)
 OBJ_EXT=o
@@ -11,9 +11,12 @@ OBJ_ROOT = $(BIN_ROOT)/obj
 SRCS = $(wildcard $(SRC_ROOT)/*.cpp)
 OBJS = $(patsubst $(SRC_ROOT)%, $(OBJ_ROOT)%, $(patsubst %cpp, %o, $(SRCS)))
 
-all: demo lib
+all: demos lib
 
+demos: demo demo2
 demo: recv send 
+demo2: sender receiver 
+	
 lib: libatp.so libatp.a
 
 buffer_test: 
@@ -22,14 +25,20 @@ buffer_test:
 recv: $(OBJS)
 	$(CXX) $(CFLAGS) -o $(BIN_ROOT)/recv $(SRC_ROOT)/test/recv.cpp $(OBJS) -L/usr/lib/
 
+sender: $(OBJS)
+	$(CXX) $(CFLAGS) -o $(BIN_ROOT)/sender $(SRC_ROOT)/test/sender.cpp $(OBJS) -L/usr/lib/
+
+receiver: $(OBJS)
+	$(CXX) $(CFLAGS) -o $(BIN_ROOT)/receiver $(SRC_ROOT)/test/receiver.cpp $(OBJS) -L/usr/lib/
+
 send: $(OBJS)
 	$(CXX) $(CFLAGS) -o $(BIN_ROOT)/send $(SRC_ROOT)/test/send.cpp $(OBJS) -L/usr/lib/
 
 libatp.so: $(OBJS)
-	$(CXX) $(CXXFLAGS) -o libatp.so -shared $(OBJS)
+	$(CXX) $(CXXFLAGS) -o $(BIN_ROOT)/libatp.so -shared $(OBJS)
 
 libatp.a: $(OBJS)
-	ar rvs libatp.a $(OBJS)
+	ar rvs $(BIN_ROOT)/libatp.a $(OBJS)
 
 $(OBJ_ROOT)/%.o: $(SRC_ROOT)/%.cpp $(OBJ_ROOT)
 	$(CXX) -c $(CFLAGS) $< -o $@
