@@ -6,8 +6,8 @@
 // ATPSocket wrap up the loop of connection open/close
 // They use socket->sys_cache rather than user's cache
 // because no user data is passed during such process
-// so 1024 bytes are enough, which is less than MAX_ATP_PACKET_PAYLOAD for ordinary ATP Packets
-#define SYSCACHE_MAX 1024
+// so 1024 bytes are enough, which is less than ATP_MSS_CEILING for ordinary ATP Packets
+#define SYSCACHE_MAX 512
 
 #if defined __GNUC__
     #define PACKED_ATTRIBUTE __attribute__((__packed__))
@@ -57,6 +57,7 @@ enum {
     ATP_PROC_FINISH = -2,
     ATP_PROC_CACHE = -3,
     ATP_PROC_DROP = -4,
+    ATP_PROC_REJECT = -5,
 };
 
 // typedef all interface struct to snakecase
@@ -66,18 +67,20 @@ typedef int ATP_PROC_RESULT;
 
 enum ATP_CALLBACKTYPE_ENUM{
     ATP_CALL_ON_ERROR = 0,
-    ATP_CALL_ON_PEERCLOSE,
-    ATP_CALL_ON_DESTROY,
     ATP_CALL_ON_STATE_CHANGE,
     ATP_CALL_GET_READ_BUFFER_SIZE,
+
     ATP_CALL_GET_RANDOM,
     ATP_CALL_LOG,
     ATP_CALL_SOCKET,
     ATP_CALL_BIND,
     ATP_CALL_CONNECT,
+    ATP_CALL_BEFORE_ACCEPT,
     ATP_CALL_ON_ACCEPT,
     ATP_CALL_SENDTO,
     ATP_CALL_ON_RECV,
+    ATP_CALL_ON_PEERCLOSE,
+    ATP_CALL_ON_DESTROY,
 
     ATP_CALLBACK_SIZE, // must be the last
 };
@@ -105,18 +108,6 @@ struct atp_iovec {
     size_t iov_len;
 };
 
-atp_context * atp_init();
-atp_socket * atp_create_socket(atp_context * context);
-int atp_listen(atp_socket * socket, uint16_t port);
-int atp_connect(atp_socket * socket, const struct sockaddr * to, socklen_t tolen);
-int atp_accept(atp_socket * socket);
-int atp_write(atp_socket * socket, void * buf, size_t length);
-ATP_PROC_RESULT atp_process_udp(atp_context * context, int sockfd, const char * buf, size_t len, const struct sockaddr * to, socklen_t tolen);
-int atp_close(atp_socket * socket);
-void atp_set_callback(atp_socket * socket, int callback_type, atp_callback_func * proc);
-int atp_eof(atp_socket * socket);
-
-
 struct PACKED_ATTRIBUTE CATPPacket{
     // apt packet layout, trivial
     // seq_nr and ack_nr are now packet-wise rather than byte-wise
@@ -131,9 +122,15 @@ struct PACKED_ATTRIBUTE CATPPacket{
 #define IPV4_HEADER_SIZE 20
 #define IPV6_HEADER_SIZE 40
 #define UDP_HEADER_SIZE 8
-static const size_t MAX_UDP_PAYLOAD = 65535 - IPV4_HEADER_SIZE - UDP_HEADER_SIZE;
-static const size_t MAX_ATP_WRITE_SIZE = 65535;
-static const size_t MAX_ATP_PACKET_PAYLOAD = ETHERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE - sizeof(CATPPacket);
+#define TCP_DEFAULT_MSS 536
+static constexpr size_t MAX_UDP_PAYLOAD = 65535 - IPV4_HEADER_SIZE - UDP_HEADER_SIZE;
+// The size of ATP's write buffer
+static constexpr size_t MAX_ATP_WRITE_BUFFER_SIZE = IP_MTU;
+static constexpr size_t MAX_ATP_READ_BUFFER_SIZE = IP_MTU;
+// The "MSS" to avoid IP fragmentation, range from [ATP_MSS_CEILING, ATP_MSS_FLOOR]
+static constexpr size_t ATP_MIN_BUFFER_SIZE = ETHERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE + 1;
+static constexpr size_t ATP_MSS_CEILING = ETHERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE - sizeof(CATPPacket);
+static constexpr size_t ATP_MSS_FLOOR = INTERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE - sizeof(CATPPacket);
 
 #ifdef __cplusplus
 }

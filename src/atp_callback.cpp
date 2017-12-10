@@ -3,26 +3,16 @@
 
 void init_callbacks(ATPSocket * socket){
     socket->callbacks[ATP_CALL_ON_ERROR] = nullptr; 
-    socket->callbacks[ATP_CALL_ON_PEERCLOSE] = [](atp_callback_arguments * args){
-        atp_socket * socket = args->socket;
-        #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
-            log_debug(socket, "Finish myself immediately when recv FIN from peer.");
-        #endif
-        return socket->close();
-    };
-    socket->callbacks[ATP_CALL_ON_DESTROY] = [](atp_callback_arguments * args){
-        atp_socket * socket = args->socket;
-        #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
-            log_debug(socket, "Destroy socket.");
-        #endif
-        return ATP_PROC_FINISH;
-    };
     socket->callbacks[ATP_CALL_ON_STATE_CHANGE] = nullptr;
     socket->callbacks[ATP_CALL_GET_READ_BUFFER_SIZE] = nullptr;
     socket->callbacks[ATP_CALL_GET_RANDOM] = nullptr;
     socket->callbacks[ATP_CALL_LOG] = nullptr;
     socket->callbacks[ATP_CALL_SOCKET] = nullptr;
     socket->callbacks[ATP_CALL_CONNECT] = nullptr;
+    socket->callbacks[ATP_CALL_BEFORE_ACCEPT] = [](atp_callback_arguments * args){
+        // send ATP_PROC_REJECT to reject
+        return ATP_PROC_OK;
+    };
     socket->callbacks[ATP_CALL_ON_ACCEPT] = nullptr;
     socket->callbacks[ATP_CALL_BIND] = [](atp_callback_arguments * args){
         atp_socket * socket = args->socket;
@@ -53,5 +43,19 @@ void init_callbacks(ATPSocket * socket){
         }
     };
     socket->callbacks[ATP_CALL_ON_RECV] = nullptr;
+    socket->callbacks[ATP_CALL_ON_PEERCLOSE] = [](atp_callback_arguments * args){
+        atp_socket * socket = args->socket;
+        #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
+            log_debug(socket, "Finish myself immediately when recv FIN from peer.");
+        #endif
+        return socket->close();
+    };
+    socket->callbacks[ATP_CALL_ON_DESTROY] = [](atp_callback_arguments * args){
+        atp_socket * socket = args->socket;
+        #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
+            log_debug(socket, "Destroy socket.");
+        #endif
+        return ATP_PROC_FINISH;
+    };
 }
 

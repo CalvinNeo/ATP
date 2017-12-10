@@ -219,13 +219,6 @@ struct OutgoingPacket{
     }
 };
 
-struct _cmp_outgoingpacket{  
-    bool operator()(OutgoingPacket * left, OutgoingPacket * right){  
-        if(left->get_head()->seq_nr == right->get_head()->seq_nr)  return left > right;  
-        return left->get_head()->seq_nr > right->get_head()->seq_nr;  
-    }  
-}; 
-
 struct ATPSocket{
     ATPContext * context = nullptr;
     // function as "port"
@@ -242,7 +235,7 @@ struct ATPSocket{
             {
             }
             socklen_t my_sock_len = sizeof(src_addr.sa);
-            getsockname(sockfd, (SA*) &(src_addr.sa), &my_sock_len);
+            getsockname(sockfd, reinterpret_cast<SA*> (&src_addr.sa), &my_sock_len);
             return src_addr;
         }
     }
@@ -252,8 +245,15 @@ struct ATPSocket{
 
     CONN_STATE_ENUM conn_state;
 
+    struct _cmp_outgoingpacket{  
+        bool operator()(OutgoingPacket * left, OutgoingPacket * right){  
+            if(left->get_head()->seq_nr == right->get_head()->seq_nr)  return left > right;  
+            return left->get_head()->seq_nr > right->get_head()->seq_nr;  
+        }  
+    }; 
     std::priority_queue<OutgoingPacket*, std::vector<OutgoingPacket*>, _cmp_outgoingpacket> inbuf;
-    std::priority_queue<OutgoingPacket*, std::vector<OutgoingPacket*>, _cmp_outgoingpacket> outbuf;
+    // std::priority_queue<OutgoingPacket*, std::vector<OutgoingPacket*>, _cmp_outgoingpacket> outbuf;
+    std::vector<OutgoingPacket*> outbuf;
 
     // my seq number
     uint32_t seq_nr = 1;
@@ -267,16 +267,21 @@ struct ATPSocket{
     uint32_t rto = 3000;
     uint64_t rto_timeout; // at this exact time(ms) will this socket timeout
 
+    // Not used yet
+    uint32_t cur_window_packets = 0; 
     // the number of packets in the send queue
     // including unsend and un-acked packets
-    // the oldest un-acked packet in the send queue is seq_nr - cur_window_packets
-    uint32_t cur_window_packets = 0; 
-    // this is byte-wise, in-flight packets + needing to be re-sent packets
-    // initially set to MAX_ATP_PACKET_PAYLOAD, regardless of all above.
-    size_t cur_window = MAX_ATP_PACKET_PAYLOAD;
+    // the oldest un-acked packet in the send queue is seq_nr - used_window_packets
+    uint32_t used_window_packets = 0; 
+
+    // this is byte-wise, set by peer
+    // by default = MAX_ATP_READ_BUFFER_SIZE
+    size_t cur_window = MAX_ATP_READ_BUFFER_SIZE;
+    // this is byte-wise, payload of in-flight packets + payload of needing to be re-sent packets
+    size_t used_window = 0;
     
     // determined by MTU
-    size_t current_max_packet_payload = MAX_ATP_PACKET_PAYLOAD;
+    size_t current_mss = ATP_MSS_CEILING;
 
     atp_callback_func * callbacks[ATP_CALLBACK_SIZE];
 
@@ -293,14 +298,8 @@ struct ATPSocket{
 
     // INTERFACES
     void clear(){
-        // size_t index; OutgoingPacket * p;
-        // for(auto && [index, p] : outbuf){
-        // for(auto pr : outbuf){
-        //     delete pr.second;
-        // }
-        while(!outbuf.empty()){
-            delete outbuf.top();
-            outbuf.pop();
+        for(OutgoingPacket * op : outbuf){
+            delete op;
         }
         while(!inbuf.empty()){
             delete inbuf.top();
@@ -316,6 +315,9 @@ struct ATPSocket{
     // passive connect
     ATP_PROC_RESULT accept(const ATPAddrHandle & to_addr, OutgoingPacket * recv_pkt);
     ATP_PROC_RESULT receive(OutgoingPacket * recv_pkt);
+    void reset_timer(){
+
+    }
     // `send_packet` will take over possession of `out_pkt`
     ATP_PROC_RESULT send_packet(OutgoingPacket * out_pkt);
     ATP_PROC_RESULT close();
@@ -397,7 +399,6 @@ inline ATPContext & get_context(){
     static ATPContext context;
     return context;
 }
-
 
 void print_out(ATPSocket * socket, OutgoingPacket * out_pkt, const char * method);
 

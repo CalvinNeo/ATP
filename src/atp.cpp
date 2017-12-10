@@ -1,12 +1,13 @@
 #include "atp_impl.h"
 #include "udp_util.h"
+#include "atp.h"
 
 atp_context * atp_init(){
     get_context().init();
     return &get_context();
 }
 
-static void sys_loop(atp_socket * socket, std::function<int(atp_socket*)> predicate){ 
+static ATP_PROC_RESULT sys_loop(atp_socket * socket, std::function<int(atp_socket*)> predicate){ 
     while (true) {
         struct sockaddr_in peer_addr; socklen_t peer_len = sizeof(peer_addr);
         sockaddr * ppeer_addr = (SA *)&peer_addr;
@@ -15,9 +16,9 @@ static void sys_loop(atp_socket * socket, std::function<int(atp_socket*)> predic
             return -1;
         ATPAddrHandle handle_to((const SA *)&peer_addr);
         socket->process(handle_to, socket->sys_cache, n);
-        if (predicate(socket) == 0)
+        if (predicate(socket) == ATP_PROC_FINISH)
         {
-            return 0;
+            return ATP_PROC_OK;
         }
     }
     return 0;
@@ -34,37 +35,43 @@ atp_socket * atp_create_socket(atp_context * context){
     return socket;
 }
 
-int atp_connect(atp_socket * socket, const struct sockaddr * to, socklen_t tolen){
+ATP_PROC_RESULT atp_async_connect(atp_socket * socket, const struct sockaddr * to, socklen_t tolen){
+    ATPAddrHandle handle(to);
+    int n;
+    return socket->connect(to);
+}
+
+ATP_PROC_RESULT atp_connect(atp_socket * socket, const struct sockaddr * to, socklen_t tolen){
     ATPAddrHandle handle(to);
     int n;
     socket->connect(to);
-    sys_loop(socket, [](atp_socket*socket){
+    sys_loop(socket, [](atp_socket * socket){
         if (socket->conn_state >= CS_CONNECTED)
         {
-            return 0;
+            return ATP_PROC_FINISH;
         }
-        return 1;
+        return ATP_PROC_OK;
     });
-    return 0;
+    return ATP_PROC_OK;
 }
 
-int atp_listen(atp_socket * socket, uint16_t host_port){
+ATP_PROC_RESULT atp_listen(atp_socket * socket, uint16_t host_port){
     assert(socket != nullptr);
     return socket->listen(host_port);
 }
 
-int atp_accept(atp_socket * socket){
-    sys_loop(socket, [](atp_socket*socket){
+ATP_PROC_RESULT atp_accept(atp_socket * socket){
+    sys_loop(socket, [](atp_socket * socket){
         if (socket->conn_state >= CS_CONNECTED)
         {
-            return 0;
+            return ATP_PROC_FINISH;
         }
-        return 1;
+        return ATP_PROC_OK;
     });
-    return 0;
+    return ATP_PROC_OK;
 }
 
-int atp_write(atp_socket * socket, void * buf, size_t length){
+ATP_PROC_RESULT atp_write(atp_socket * socket, void * buf, size_t length){
     assert(socket != nullptr);
     return socket->write(buf, length);
 }
@@ -128,14 +135,14 @@ int atp_close(atp_socket * socket){
         log_debug(socket, "User called atp_close");
     #endif
     socket->close();
-    sys_loop(socket, [](atp_socket*socket){
+    sys_loop(socket, [](atp_socket * socket){
         if (socket->conn_state == CS_DESTROY)
         {
-            return 0;
+            return ATP_PROC_FINISH;
         }
-        return 1;
+        return ATP_PROC_OK;
     });
-    return 0;
+    return ATP_PROC_OK;
 }
 
 void atp_set_callback(atp_socket * socket, int callback_type, atp_callback_func * proc){
