@@ -265,7 +265,7 @@ struct ATPSocket{
     uint16_t sock_id;
     uint16_t peer_sock_id;
 
-    ATPAddrHandle src_addr;
+    mutable ATPAddrHandle src_addr;
     ATPAddrHandle & get_src_addr(){
         if (conn_state == CS_UNINITIALIZED)
         {
@@ -386,13 +386,14 @@ struct ATPSocket{
     ATP_PROC_RESULT invoke_callback(int callback_type, atp_callback_arguments * args);
     // update my_seq_acked_by_peer
     ATP_PROC_RESULT do_ack_packet(OutgoingPacket * recv_pkt);
+    void update_rto(OutgoingPacket * recv_pkt);
     void destroy();
     ATP_PROC_RESULT check_timeout();
     const char * hash_code() const{
         return ATPSocket::make_hash_code(sock_id, dest_addr);
     }
     const char * to_string() const{
-        sprintf(hash_str, "[%05u](%s:%05u)->(%s:%05u) fd:%d", sock_id, get_src_addr().to_string(), get_src_addr().host_port()
+        sprintf(hash_str, "[%05u](%s:%05u)->(%s:%05u) fd:%d", sock_id, this->get_src_addr().to_string(), this->get_src_addr().host_port()
             , dest_addr.to_string(), dest_addr.host_port(), sockfd);
         return const_cast<const char *>(hash_str);
     }
@@ -436,6 +437,7 @@ struct ATPContext{
     std::vector<ATPSocket *> sockets;
     std::map<std::string, ATPSocket *> look_up;
     std::map<uint16_t, ATPSocket *> listen_sockets;
+    std::vector<ATPSocket *> destroyed_sockets;
 
     uint64_t start_ms;
 
@@ -444,12 +446,30 @@ struct ATPContext{
     }
 
     void destroy(ATPSocket * socket){
-        // sockets.erase(socket);
-        // delete socket;
+        #if defined (ATP_LOG_AT_DEBUG)
+            log_debug(socket, "Context are destroying me. Goodbye. There are %u sockets left in the context including me", sockets.size());
+        #endif
+        auto iter = std::find(sockets.begin(), sockets.end(), socket);
+        sockets.erase(iter);
+        auto map_iter1 = look_up.find(socket->hash_code());
+        if (map_iter1 != look_up.end())
+        {
+            look_up.erase(map_iter1);
+        }
+        auto map_iter2 = listen_sockets.find(socket->get_src_addr().host_port());
+        if (map_iter2 != listen_sockets.end())
+        {
+            listen_sockets.erase(map_iter2);
+        }
+        delete socket;
     }
 
     void daily_routine(){
-
+        // clear destroyed sockets
+        for(ATPSocket * socket : destroyed_sockets){
+            destroy(socket);
+        }
+        destroyed_sockets.clear();
     }
 
     ATPSocket * find_socket_by_fd(const ATPAddrHandle & handle_to, int sockfd);

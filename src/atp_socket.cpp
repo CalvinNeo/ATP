@@ -865,6 +865,7 @@ ATP_PROC_RESULT ATPSocket::do_ack_packet(OutgoingPacket * recv_pkt){
             #if defined (ATP_LOG_AT_DEBUG)
                 log_debug(this, "Remove ATPPackct seq_nr:%u from buffer, %u packet remain.", out_pkt->get_head()->seq_nr, outbuf.size());
             #endif
+            update_rto(out_pkt);
             std::pop_heap(outbuf.begin(), outbuf.end(), _cmp_outgoingpacket());
             outbuf.pop_back();
             delete out_pkt;
@@ -876,11 +877,28 @@ ATP_PROC_RESULT ATPSocket::do_ack_packet(OutgoingPacket * recv_pkt){
     }
 }
 
+void ATPSocket::update_rto(OutgoingPacket * recv_pkt){
+    if (recv_pkt->transmissions == 1)
+    {
+        static constexpr double alpha = 0.9;
+        uint64_t new_rtt = get_current_ms() - recv_pkt->timestamp;
+        this->rtt = static_cast<uint32_t>(alpha * rtt + (1 - alpha) * new_rtt);
+        uint32_t computed_rto = static_cast<uint32_t>(2 * this->rtt);
+        this->rto = std::max(computed_rto, static_cast<uint32_t>(ATP_RTO_MIN));
+        this->rto = std::min(computed_rto, static_cast<uint32_t>(ATP_RTO_MAX));
+        #if defined (ATP_LOG_AT_DEBUG)
+            log_debug(this, "Computed new rtt:%u rto:%u, choose rto:%u.", this->rtt, computed_rto, this->rto);
+        #endif
+    }
+}
+
 void ATPSocket::destroy(){
     // wait 2MSL to destroy
     atp_callback_arguments arg;
     arg = make_atp_callback_arguments(ATP_CALL_ON_DESTROY, nullptr, dest_addr);
     ATP_PROC_RESULT result = invoke_callback(ATP_CALL_ON_DESTROY, &arg);
+    // notify context
+    context->destroyed_sockets.push_back(this);
 }
 
 ATP_PROC_RESULT ATPSocket::check_timeout(){

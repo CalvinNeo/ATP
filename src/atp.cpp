@@ -48,7 +48,7 @@ static ATP_PROC_RESULT sys_loop(atp_socket * socket, std::function<int(atp_socke
                 break;
             }
         }else{
-            ATPAddrHandle handle_to((const SA *)&peer_addr);
+            ATPAddrHandle handle_to(reinterpret_cast<const SA *>(&peer_addr));
             socket->process(handle_to, socket->sys_cache, n);
         }
         if (predicate(socket) == ATP_PROC_FINISH)
@@ -187,8 +187,9 @@ ATP_PROC_RESULT atp_eof(atp_socket * socket){
 ATP_PROC_RESULT atp_timer_event(atp_context * context, uint64_t interval){
     for(ATPSocket * socket: context->sockets){
         ATP_PROC_RESULT result = socket->check_timeout();
-
     }
+    context->daily_routine();
+    return ATP_PROC_OK;
 }
 
 bool atp_destroyed(atp_socket * socket){
