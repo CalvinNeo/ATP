@@ -16,6 +16,7 @@ all: demos lib
 demos: demo demo2
 demo: recv send 
 demo2: sender receiver 
+demo_poll: send_poll recv
 	
 lib: libatp.so libatp.a
 
@@ -25,14 +26,17 @@ buffer_test:
 recv: $(OBJS)
 	$(CXX) $(CFLAGS) -o $(BIN_ROOT)/recv $(SRC_ROOT)/test/recv.cpp $(OBJS) -L/usr/lib/
 
+send: $(OBJS)
+	$(CXX) $(CFLAGS) -o $(BIN_ROOT)/send $(SRC_ROOT)/test/send.cpp $(OBJS) -L/usr/lib/
+
+send_poll: $(OBJS)
+	$(CXX) $(CFLAGS) -o $(BIN_ROOT)/send_poll $(SRC_ROOT)/test/send_poll.cpp $(OBJS) -L/usr/lib/
+
 sender: $(OBJS)
 	$(CXX) $(CFLAGS) -o $(BIN_ROOT)/sender $(SRC_ROOT)/test/sender.cpp $(OBJS) -L/usr/lib/
 
 receiver: $(OBJS)
 	$(CXX) $(CFLAGS) -o $(BIN_ROOT)/receiver $(SRC_ROOT)/test/receiver.cpp $(OBJS) -L/usr/lib/
-
-send: $(OBJS)
-	$(CXX) $(CFLAGS) -o $(BIN_ROOT)/send $(SRC_ROOT)/test/send.cpp $(OBJS) -L/usr/lib/
 
 libatp.so: $(OBJS)
 	$(CXX) $(CXXFLAGS) -o $(BIN_ROOT)/libatp.so -shared $(OBJS)

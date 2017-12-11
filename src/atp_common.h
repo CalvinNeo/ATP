@@ -1,3 +1,22 @@
+/*
+*   Calvin Neo
+*   Copyright (C) 2017  Calvin Neo <calvinneo@calvinneo.com>
+*   https://github.com/CalvinNeo/ATP
+*
+*   This program is free software; you can redistribute it and/or modify
+*   it under the terms of the GNU General Public License as published by
+*   the Free Software Foundation; either version 2 of the License, or
+*   (at your option) any later version.
+*
+*   This program is distributed in the hope that it will be useful,
+*   but WITHOUT ANY WARRANTY; without even the implied warranty of
+*   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+*   GNU General Public License for more details.
+*
+*   You should have received a copy of the GNU General Public License along
+*   with this program; if not, write to the Free Software Foundation, Inc.,
+*   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+*/
 #pragma once
 #include <netinet/in.h> // sockaddr
 #include <arpa/inet.h> // inet_pton
@@ -7,7 +26,7 @@
 // They use socket->sys_cache rather than user's cache
 // because no user data is passed during such process
 // so 1024 bytes are enough, which is less than ATP_MSS_CEILING for ordinary ATP Packets
-#define SYSCACHE_MAX 512
+#define ATP_SYSCACHE_MAX 512
 
 #if defined __GNUC__
     #define PACKED_ATTRIBUTE __attribute__((__packed__))
@@ -109,11 +128,12 @@ struct atp_iovec {
 };
 
 struct PACKED_ATTRIBUTE CATPPacket{
-    // apt packet layout, trivial
+    // ATP packet layout, trivial
     // seq_nr and ack_nr are now packet-wise rather than byte-wise
     uint32_t seq_nr;
     uint32_t ack_nr;
     uint16_t peer_sock_id; uint16_t flags;
+    uint16_t window_size;
 };
 
 #define ETHERNET_MTU 1500
@@ -123,14 +143,14 @@ struct PACKED_ATTRIBUTE CATPPacket{
 #define IPV6_HEADER_SIZE 40
 #define UDP_HEADER_SIZE 8
 #define TCP_DEFAULT_MSS 536
-static constexpr size_t MAX_UDP_PAYLOAD = 65535 - IPV4_HEADER_SIZE - UDP_HEADER_SIZE;
+static const size_t MAX_UDP_PAYLOAD = 65535 - IPV4_HEADER_SIZE - UDP_HEADER_SIZE;
 // The size of ATP's write buffer
-static constexpr size_t MAX_ATP_WRITE_BUFFER_SIZE = IP_MTU;
-static constexpr size_t MAX_ATP_READ_BUFFER_SIZE = IP_MTU;
+static const size_t MAX_ATP_WRITE_BUFFER_SIZE = IP_MTU;
+static const size_t MAX_ATP_READ_BUFFER_SIZE = IP_MTU;
 // The "MSS" to avoid IP fragmentation, range from [ATP_MSS_CEILING, ATP_MSS_FLOOR]
-static constexpr size_t ATP_MIN_BUFFER_SIZE = ETHERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE + 1;
-static constexpr size_t ATP_MSS_CEILING = ETHERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE - sizeof(CATPPacket);
-static constexpr size_t ATP_MSS_FLOOR = INTERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE - sizeof(CATPPacket);
+static const size_t ATP_MIN_BUFFER_SIZE = ETHERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE + 1;
+static const size_t ATP_MSS_CEILING = ETHERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE - sizeof(CATPPacket);
+static const size_t ATP_MSS_FLOOR = INTERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE - sizeof(CATPPacket);
 
 #ifdef __cplusplus
 }

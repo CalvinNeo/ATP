@@ -1,3 +1,22 @@
+/*
+*   Calvin Neo
+*   Copyright (C) 2017  Calvin Neo <calvinneo@calvinneo.com>
+*   https://github.com/CalvinNeo/ATP
+*
+*   This program is free software; you can redistribute it and/or modify
+*   it under the terms of the GNU General Public License as published by
+*   the Free Software Foundation; either version 2 of the License, or
+*   (at your option) any later version.
+*
+*   This program is distributed in the hope that it will be useful,
+*   but WITHOUT ANY WARRANTY; without even the implied warranty of
+*   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+*   GNU General Public License for more details.
+*
+*   You should have received a copy of the GNU General Public License along
+*   with this program; if not, write to the Free Software Foundation, Inc.,
+*   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+*/
 #include "atp_impl.h"
 #include "udp_util.h"
 #include <algorithm>
@@ -43,7 +62,8 @@ OutgoingPacket * ATPSocket::basic_send_packet(uint16_t flags){
         seq_nr, //seq_nr
         ack_nr, // ack_nr
         peer_sock_id, // peer_sock_id
-        flags // flags
+        flags, // flags
+        my_window // my window
     };
     OutgoingPacket * out_pkt = new OutgoingPacket{
         true,
@@ -148,6 +168,8 @@ ATP_PROC_RESULT ATPSocket::accept(const ATPAddrHandle & to_addr, OutgoingPacket 
     seq_nr = rand() & 0xffff;
     // must set ack_nr, because now ack_nr is still 0
     ack_nr = recv_pkt->get_head()->seq_nr;
+    // get peer's window
+    cur_window = recv_pkt->get_head()->window_size;
 
     atp_callback_arguments arg = make_atp_callback_arguments(ATP_CALL_BEFORE_ACCEPT, nullptr, dest_addr);
     result = invoke_callback(ATP_CALL_BEFORE_ACCEPT, &arg);
@@ -168,7 +190,6 @@ ATP_PROC_RESULT ATPSocket::accept(const ATPAddrHandle & to_addr, OutgoingPacket 
     }else if(result == ATP_PROC_REJECT)
     {
         OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_RST));
-        add_data(out_pkt, &sock_id, sizeof(sock_id));
         result = send_packet(out_pkt);
 
         #if defined (ATP_LOG_AT_DEBUG)
@@ -210,7 +231,7 @@ ATP_PROC_RESULT ATPSocket::send_packet(OutgoingPacket * out_pkt){
     rto_timeout = current_ms + rto;
 
     // when the package is constructed, update `seq_nr` for the next package
-    if (out_pkt->payload > 0)
+    if (out_pkt->payload > 0 && !out_pkt->need_resend)
     {
         out_pkt->get_head()->seq_nr ++;
         seq_nr ++;
@@ -228,12 +249,23 @@ ATP_PROC_RESULT ATPSocket::send_packet(OutgoingPacket * out_pkt){
         print_out(this, out_pkt, "snd");
     #endif
 
-    outbuf.push_back(out_pkt);
-    std::push_heap(outbuf.begin(), outbuf.end(), _cmp_outgoingpacket());
-
     // udp send
     atp_callback_arguments arg = make_atp_callback_arguments(ATP_CALL_SENDTO, out_pkt, dest_addr);
     ATP_PROC_RESULT result = invoke_callback(ATP_CALL_SENDTO, &arg);
+
+    if (out_pkt->need_resend)
+    {
+        // already in queue
+        out_pkt->need_resend = false;
+    }
+    else if (out_pkt->payload == 0 && !(out_pkt->get_head()->get_syn() || out_pkt->get_head()->get_fin()) )
+    {
+        // do not put in sending queue
+        delete out_pkt;
+    }else{
+        outbuf.push_back(out_pkt);
+        std::push_heap(outbuf.begin(), outbuf.end(), _cmp_outgoingpacket());
+    }
 
     return result;
 }
@@ -379,6 +411,10 @@ bool ATPSocket::readable() const{
 }
 
 size_t ATPSocket::bytes_can_send_once() const {
+    if (cur_window < used_window)
+    {
+        return 0;
+    }
     return std::min(cur_window - used_window, MAX_ATP_WRITE_BUFFER_SIZE);
 }
 size_t ATPSocket::bytes_can_send_one_packet() const {
@@ -400,19 +436,30 @@ ATP_PROC_RESULT ATPSocket::write(const void * buf, const size_t len){
         #endif
         return ATP_PROC_ERROR;
     }
+    // TODO improve here
     if (len > bytes_can_send_once())
-    {
+    {   
         #if defined (ATP_LOG_AT_DEBUG)
-            log_debug(this, "Too big packet for an ATP Packet, devide them.");
+            // Must because of window restriction
+            log_debug(this, "Window restricted.");
         #endif
+        return ATP_PROC_ERROR;
     }
+    #if defined (ATP_LOG_AT_DEBUG)
+        if (len > bytes_can_send_one_packet())
+        {
+            log_debug(this, "Must devide into several ATP packets.");
+        }
+    #endif
     size_t p = 0; int packet_id = 0;
     while(p < len){
         size_t current_packet_payload_limit = bytes_can_send_one_packet();
         OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
+        
         size_t new_length = std::min(current_packet_payload_limit, len - p);
         add_data(out_pkt, buf + p, new_length);
         ATP_PROC_RESULT result = send_packet(out_pkt);
+        packet_id++;
         if (result == ATP_PROC_ERROR)
         {
             #if defined (ATP_LOG_AT_DEBUG)
@@ -473,21 +520,40 @@ ATP_PROC_RESULT ATPSocket::check_fin(OutgoingPacket * recv_pkt){
         case CS_FIN_WAIT_2: // A
         {
             conn_state = CS_TIME_WAIT;
+            uint64_t current_ms = get_current_ms();
+            death_timeout = current_ms + context->msl2;
 
             #if defined (ATP_LOG_AT_DEBUG)
-                log_debug(this, "Recv peer's FIN, Send the last ACK to Peer, wait 2MSL.");
+                log_debug(this, "Recv peer's FIN, Send the last ACK to Peer, wait 2MSL from %u to %u.", current_ms, death_timeout);
             #endif
+
             OutgoingPacket *  out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
             result = send_packet(out_pkt);
 
             atp_callback_arguments arg;
             // arg = make_atp_callback_arguments(ATP_CALL_ON_PEERCLOSE, recv_pkt, dest_addr);
             // result = context->callbacks[ATP_CALL_ON_PEERCLOSE](&arg);
-            this->destroy(true);
             break;
         }
         case CS_LAST_ACK: // B
+        {
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Peer resend FIN, send ack.");
+            #endif
+            OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
+            result = send_packet(out_pkt);
+            break;
+        }
         case CS_TIME_WAIT: // A
+        {
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Peer resend FIN, send ack.");
+            #endif
+            death_timeout = get_current_ms() + context->msl2;
+            OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
+            result = send_packet(out_pkt);
+            break;
+        }
         case CS_RESET:
         case CS_DESTROY:
         default:
@@ -513,6 +579,8 @@ ATP_PROC_RESULT ATPSocket::update_myack(OutgoingPacket * recv_pkt){
     }
     ATP_PROC_RESULT action = ATP_PROC_OK;
     uint16_t peer_seq = recv_pkt->get_head()->seq_nr;
+    // get peer's window
+    cur_window = recv_pkt->get_head()->window_size;
     if (recv_pkt->payload == 0)
     {
         // only ack counts
@@ -556,12 +624,16 @@ ATP_PROC_RESULT ATPSocket::update_myack(OutgoingPacket * recv_pkt){
             case CS_UNINITIALIZED:
             case CS_IDLE:
             case CS_LISTEN:
-                err_sys("At state CS_UNINITIALIZED/CS_IDLE/CS_LISTEN: Ack is illegal");
+                #if defined (ATP_LOG_AT_DEBUG)
+                    log_debug(this, "At state CS_UNINITIALIZED/CS_IDLE/CS_LISTEN: Ack is illegal");
+                #endif
                 action = ATP_PROC_DROP;
                 break;
             case CS_SYN_SENT:
                 // already handled in `ATPSocket::process`
-                err_sys("At state CS_SYN_SENT: this case is already handled in ATPSocket::process");
+                #if defined (ATP_LOG_AT_DEBUG)
+                    log_debug(this, "At state CS_SYN_SENT: this case is already handled in ATPSocket::process");
+                #endif
                 action = ATP_PROC_DROP;
                 break;
             case CS_SYN_RECV:
@@ -643,12 +715,21 @@ ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buff
     if(pkt->get_syn() && pkt->get_ack()){
         // recv the second handshake
         // established on side A
-        assert(conn_state == CS_SYN_SENT);
+        if (conn_state != CS_SYN_SENT)
+        {
+            OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_RST));
+            result = send_packet(out_pkt);
+        }
         conn_state = CS_CONNECTED;
 
         peer_sock_id = *reinterpret_cast<uint16_t *>(recv_pkt->data + sizeof(ATPPacket));
         // must set ack_nr, because now ack_nr is still 0
         ack_nr = recv_pkt->get_head()->seq_nr;
+        // get peer's window
+        cur_window = recv_pkt->get_head()->window_size;
+        // MUST ack my previous SYN Packet, or it will be re-sent
+        do_ack_packet(recv_pkt);
+
         #if defined (ATP_LOG_AT_DEBUG)
             log_debug(this, "Connection established on A's side, sending ACK immediately to B to complete handshake.");
         #endif
@@ -665,9 +746,6 @@ ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buff
     } else if(pkt->get_syn()){
         // recv the first handshake
         // send the second handshake
-        #if defined (ATP_LOG_AT_DEBUG)
-            log_debug(this, "Got a SYN from peer, accept.");
-        #endif
         #if defined (ATP_LOG_AT_NOTE) 
             print_out(this, recv_pkt, "rcv");
         #endif
@@ -688,6 +766,7 @@ ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buff
                 print_out(this, recv_pkt, "drop");
             #endif
             delete recv_pkt;
+            recv_pkt = nullptr;
             result = ATP_PROC_OK;
             break;
         case ATP_PROC_OK:
@@ -719,6 +798,7 @@ ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buff
                         print_out(this, top_packet, "drop");
                     #endif
                     delete top_packet;
+                    top_packet = nullptr;
                     result = ATP_PROC_OK;
                     break;
                 case ATP_PROC_OK:
@@ -753,7 +833,7 @@ ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buff
         if (conn_state == CS_DESTROY)
         {
             // destroy immediately
-            this->destroy(false);
+            this->destroy();
         }
         result = action;
     } 
@@ -783,11 +863,12 @@ ATP_PROC_RESULT ATPSocket::do_ack_packet(OutgoingPacket * recv_pkt){
         if (out_pkt->get_head()->seq_nr <= my_seq_acked_by_peer)
         {
             #if defined (ATP_LOG_AT_DEBUG)
-                log_debug(this, "Remove ATPPackct seq_nr:%u from buffer.", out_pkt->get_head()->seq_nr);
+                log_debug(this, "Remove ATPPackct seq_nr:%u from buffer, %u packet remain.", out_pkt->get_head()->seq_nr, outbuf.size());
             #endif
             std::pop_heap(outbuf.begin(), outbuf.end(), _cmp_outgoingpacket());
             outbuf.pop_back();
             delete out_pkt;
+            out_pkt = nullptr;
             used_window_packets --;
         }else{
             break;
@@ -795,28 +876,45 @@ ATP_PROC_RESULT ATPSocket::do_ack_packet(OutgoingPacket * recv_pkt){
     }
 }
 
-void ATPSocket::destroy(bool wait_2msl){
+void ATPSocket::destroy(){
     // wait 2MSL to destroy
     atp_callback_arguments arg;
     arg = make_atp_callback_arguments(ATP_CALL_ON_DESTROY, nullptr, dest_addr);
     ATP_PROC_RESULT result = invoke_callback(ATP_CALL_ON_DESTROY, &arg);
 }
 
-void ATPSocket::check_timeout(){
+ATP_PROC_RESULT ATPSocket::check_timeout(){
     uint64_t current_ms = get_current_ms();
-    if (current_ms > rto_timeout)
+    // check resend timeout
+    if ((int64_t)(current_ms - rto_timeout) > 0 && rto_timeout != 0)
     {
-        #if defined (ATP_LOG_AT_DEBUG)
-            log_debug(this, "Retransmit all %u un-acked packet", outbuf.size());
-        #endif
-        for(OutgoingPacket * out_pkt : outbuf){
-            out_pkt->need_resend = true;
-        }
-        for(OutgoingPacket * out_pkt : outbuf){
-            if (out_pkt->need_resend)
-            {
-                send_packet(out_pkt);
+        if (!outbuf.empty())
+        {
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Retransmit all %u un-acked packet", outbuf.size());
+            #endif
+            for(OutgoingPacket * out_pkt : outbuf){
+                out_pkt->need_resend = true;
+            }
+            for(OutgoingPacket * out_pkt : outbuf){
+                if (out_pkt->need_resend)
+                {
+                    send_packet(out_pkt);
+                }
             }
         }
     }
+    if (conn_state == CS_TIME_WAIT)
+    {
+        if ((int64_t)(current_ms - death_timeout) > 0 && death_timeout != 0)
+        {
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Death timeouted at %u %u .", death_timeout, current_ms);
+            #endif
+            conn_state = CS_DESTROY;
+            this->destroy();
+            return ATP_PROC_FINISH;
+        }
+    }
+    return ATP_PROC_OK;
 }

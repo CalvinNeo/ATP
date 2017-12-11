@@ -1,3 +1,22 @@
+/*
+*   Calvin Neo
+*   Copyright (C) 2017  Calvin Neo <calvinneo@calvinneo.com>
+*   https://github.com/CalvinNeo/ATP
+*
+*   This program is free software; you can redistribute it and/or modify
+*   it under the terms of the GNU General Public License as published by
+*   the Free Software Foundation; either version 2 of the License, or
+*   (at your option) any later version.
+*
+*   This program is distributed in the hope that it will be useful,
+*   but WITHOUT ANY WARRANTY; without even the implied warranty of
+*   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+*   GNU General Public License for more details.
+*
+*   You should have received a copy of the GNU General Public License along
+*   with this program; if not, write to the Free Software Foundation, Inc.,
+*   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+*/
 #pragma once
 
 #include "error.h"
@@ -98,20 +117,41 @@ struct PACKED_ATTRIBUTE ATPPacket : public CATPPacket{
     template <typename ... Args>
     static uint16_t create_flags(Args&& ... args){
         uint16_t f = 0;
-        std::array<uint16_t, sizeof...(Args)> value = { args... };
-        for(const auto & s: value){
-            f |= s;
-        }
+        f = ( ... | args);
         f &= PACKETFLAG_MASK;
         return f;
     }
 
+    bool has(char f) const{
+        return (flags & f) == 0 ? 0 : 1;
+    }
+
+    template <typename ... Args>
+    static bool any(Args&& ... args){
+        std::array<uint16_t, sizeof...(Args)> value = { args... };
+        for(const auto & s: value){
+            if(has(s)){
+                return true;
+            }
+        }
+        return false;
+    }
+    template <typename ... Args>
+    static bool all(Args&& ... args){
+        std::array<uint16_t, sizeof...(Args)> value = { args... };
+        for(const auto & s: value){
+            if(!has(s)){
+                return false;
+            }
+        }
+        return true;
+    }
 };
 
 static_assert(std::is_trivial<ATPPacket>::value, "ATPPacket is not trivial");
 static_assert(std::is_pod<ATPPacket>::value, "ATPPacket is not pod");
 static_assert(std::is_aggregate<ATPPacket>::value, "ATPPacket is not aggregate");
-static_assert(sizeof(ATPPacket) == 12, "ATPPacket's size is not equal to 12");
+static_assert(sizeof(ATPPacket) == 14, "ATPPacket's size is not equal to 14");
 
 extern const char * CONN_STATE_STRS [];
 
@@ -265,7 +305,8 @@ struct ATPSocket{
     uint32_t rtt = 0;
     uint32_t rtt_var = 800;
     uint32_t rto = 3000;
-    uint64_t rto_timeout; // at this exact time(ms) will this socket timeout
+    uint64_t rto_timeout = 0; // at this exact time(ms) will this socket timeout
+    uint64_t death_timeout = 0; // at this exact time change from TIME_WAIT to DESTROY
 
     // Not used yet
     uint32_t cur_window_packets = 0; 
@@ -279,13 +320,14 @@ struct ATPSocket{
     size_t cur_window = MAX_ATP_READ_BUFFER_SIZE;
     // this is byte-wise, payload of in-flight packets + payload of needing to be re-sent packets
     size_t used_window = 0;
+    size_t my_window = MAX_ATP_READ_BUFFER_SIZE;
     
     // determined by MTU
     size_t current_mss = ATP_MSS_CEILING;
 
     atp_callback_func * callbacks[ATP_CALLBACK_SIZE];
 
-    char sys_cache[SYSCACHE_MAX];
+    char * sys_cache = nullptr;
 
     ~ATPSocket(){
         clear();
@@ -298,6 +340,11 @@ struct ATPSocket{
 
     // INTERFACES
     void clear(){
+        if (sys_cache != nullptr)
+        {
+             delete [] sys_cache;
+             sys_cache = nullptr;
+        }
         for(OutgoingPacket * op : outbuf){
             delete op;
         }
@@ -339,8 +386,8 @@ struct ATPSocket{
     ATP_PROC_RESULT invoke_callback(int callback_type, atp_callback_arguments * args);
     // update my_seq_acked_by_peer
     ATP_PROC_RESULT do_ack_packet(OutgoingPacket * recv_pkt);
-    void destroy(bool wait_2msl);
-    void check_timeout();
+    void destroy();
+    ATP_PROC_RESULT check_timeout();
     const char * hash_code() const{
         return ATPSocket::make_hash_code(sock_id, dest_addr);
     }
@@ -363,6 +410,7 @@ struct ATPContext{
     void clear(){
         for(ATPSocket * socket : sockets){
             delete (socket);
+            socket = nullptr;
         }
         sockets.clear();
         look_up.clear();
@@ -381,6 +429,7 @@ struct ATPContext{
         clear();
     }
 
+    uint64_t msl2 = 3000;
     size_t opt_sndbuf;
     size_t opt_rcvbuf;
 
@@ -393,6 +442,18 @@ struct ATPContext{
     uint16_t new_sock_id(){
         return std::rand();
     }
+
+    void destroy(ATPSocket * socket){
+        // sockets.erase(socket);
+        // delete socket;
+    }
+
+    void daily_routine(){
+
+    }
+
+    ATPSocket * find_socket_by_fd(const ATPAddrHandle & handle_to, int sockfd);
+    ATPSocket * find_socket_by_head(const ATPAddrHandle & handle_to, ATPPacket * pkt);
 };
 
 inline ATPContext & get_context(){
