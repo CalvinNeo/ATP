@@ -33,6 +33,7 @@
 
 *.log
 *.tags*
+*.dat
 
 bin/
 udp_test/

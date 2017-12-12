@@ -48,6 +48,7 @@ void init_callbacks(ATPSocket * socket){
     socket->callbacks[ATP_CALL_SENDTO] = [](atp_callback_arguments * args){
         atp_socket * socket = args->socket;
         const struct sockaddr * sa = args->addr;
+        ATPPacket * pkt = (ATPPacket *)args->data;
         int n = sendto(socket->sockfd, args->data, args->length, 0, sa, args->addr_len);
         #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
             // const sockaddr_in * sk = (const sockaddr_in *)sa;

@@ -28,8 +28,13 @@ atp_context * atp_init(){
 }
 
 static void alarm_handler(int interval){
-    atp_timer_event(&get_context(), 1000);
-    alarm(1);
+    ATP_PROC_RESULT result = atp_timer_event(&get_context(), 1000);
+    if (result == ATP_PROC_FINISH)
+    {
+        // stop triggering
+    }else{
+        alarm(1);
+    }
 }
 
 static ATP_PROC_RESULT sys_loop(atp_socket * socket, std::function<int(atp_socket*)> predicate){ 
@@ -123,6 +128,7 @@ ATP_PROC_RESULT atp_write(atp_socket * socket, void * buf, size_t length){
 ATP_PROC_RESULT atp_process_udp(atp_context * context, int sockfd, const char * buf, size_t len, const struct sockaddr * to, socklen_t tolen){
     assert(context != nullptr);
     ATPAddrHandle handle_to(to);
+    ATP_PROC_RESULT result = ATP_PROC_OK;
     if (handle_to.host_port() == 0 && handle_to.host_addr() == 0)
     {
         // error
@@ -141,7 +147,7 @@ ATP_PROC_RESULT atp_process_udp(atp_context * context, int sockfd, const char * 
         {
             return ATP_PROC_ERROR;
         }else{
-            return socket->process(handle_to, buf, len);
+            result = socket->process(handle_to, buf, len);
         }
     } else{
         ATPSocket * socket = context->find_socket_by_head(handle_to, pkt);
@@ -149,9 +155,10 @@ ATP_PROC_RESULT atp_process_udp(atp_context * context, int sockfd, const char * 
         {
             return ATP_PROC_ERROR;
         }else{
-            return socket->process(handle_to, buf, len);
+            result = socket->process(handle_to, buf, len);
         }
     }
+    return context->daily_routine();
 }
 
 ATP_PROC_RESULT atp_close(atp_socket * socket){
@@ -173,6 +180,9 @@ ATP_PROC_RESULT atp_close(atp_socket * socket){
 
 ATP_PROC_RESULT atp_async_close(atp_socket * socket){
     assert(socket != nullptr);
+    #if defined (ATP_LOG_AT_DEBUG)
+        log_debug(socket, "User called atp_async_close");
+    #endif
     return socket->close();
 }
 
@@ -185,11 +195,8 @@ ATP_PROC_RESULT atp_eof(atp_socket * socket){
 }
 
 ATP_PROC_RESULT atp_timer_event(atp_context * context, uint64_t interval){
-    for(ATPSocket * socket: context->sockets){
-        ATP_PROC_RESULT result = socket->check_timeout();
-    }
-    context->daily_routine();
-    return ATP_PROC_OK;
+    ATP_PROC_RESULT result = context->daily_routine();
+    return result;
 }
 
 bool atp_destroyed(atp_socket * socket){

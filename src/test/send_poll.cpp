@@ -75,9 +75,7 @@ int main(){
             break;
         }
         else if (ret == 0) {
-            atp_timer_event(context, 1000);
-            if (atp_destroyed(socket))
-            {
+            if(atp_timer_event(context, 1000) == ATP_PROC_FINISH){
                 break;
             }
         }
@@ -87,7 +85,6 @@ int main(){
                 if (!feof(stdin))
                 {
                     n = strlen(msg);
-                    printf("get from %u: %.*s\n", n, n, msg);
                     atp_write(socket, msg, n);
                 }
             }
@@ -96,7 +93,7 @@ int main(){
                 if ((n = recvfrom(sockfd, msg, ATP_MIN_BUFFER_SIZE, 0, psock_addr, &srv_len)) < 0)
                     puts("err");
                 ATP_PROC_RESULT result = atp_process_udp(context, sockfd, msg, n, (const SA *)&srv_addr, srv_len);
-                if (result == ATP_PROC_FINISH || atp_destroyed(socket))
+                if (result == ATP_PROC_FINISH)
                 {
                     break;
                 }

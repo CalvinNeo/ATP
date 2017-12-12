@@ -1,7 +1,7 @@
 CC = gcc
 CXX = g++-7
 
-CFLAGS=-Wall -Wno-unused-variable -Wno-unused-but-set-variable -DPOSIX -g -O0 -fpermissive -fPIC -std=c++1z $(NO_WARN)
+CFLAGS=-w -Wno-unused-variable -Wno-unused-but-set-variable -DPOSIX -g -O0 -fpermissive -fPIC -std=c++1z $(NO_WARN)
 OBJ_EXT=o
 
 SRC_ROOT = ./src
@@ -13,9 +13,9 @@ OBJS = $(patsubst $(SRC_ROOT)%, $(OBJ_ROOT)%, $(patsubst %cpp, %o, $(SRCS)))
 
 all: demos lib
 
-demos: demo demo2
+demos: demo demo_file demo_poll
 demo: recv send 
-demo2: sender receiver 
+demo_file: sendfile recvfile 
 demo_poll: send_poll recv
 	
 lib: libatp.so libatp.a
@@ -32,11 +32,14 @@ send: $(OBJS)
 send_poll: $(OBJS)
 	$(CXX) $(CFLAGS) -o $(BIN_ROOT)/send_poll $(SRC_ROOT)/test/send_poll.cpp $(OBJS) -L/usr/lib/
 
-sender: $(OBJS)
-	$(CXX) $(CFLAGS) -o $(BIN_ROOT)/sender $(SRC_ROOT)/test/sender.cpp $(OBJS) -L/usr/lib/
+sendfile: $(OBJS)
+	$(CXX) $(CFLAGS) -o $(BIN_ROOT)/sendfile $(SRC_ROOT)/test/sendfile.cpp $(OBJS) -L/usr/lib/
 
-receiver: $(OBJS)
-	$(CXX) $(CFLAGS) -o $(BIN_ROOT)/receiver $(SRC_ROOT)/test/receiver.cpp $(OBJS) -L/usr/lib/
+recvfile: $(OBJS)
+	$(CXX) $(CFLAGS) -o $(BIN_ROOT)/recvfile $(SRC_ROOT)/test/recvfile.cpp $(OBJS) -L/usr/lib/
+
+send_aio: $(OBJS)
+	$(CXX) $(CFLAGS) -o $(BIN_ROOT)/send_aio $(SRC_ROOT)/test/send_aio.cpp $(OBJS) -L/usr/lib/ -lrt
 
 libatp.so: $(OBJS)
 	$(CXX) $(CXXFLAGS) -o $(BIN_ROOT)/libatp.so -shared $(OBJS)
@@ -53,3 +56,6 @@ $(OBJ_ROOT):
 .PHONY : clean
 clean:
 	rm -rf $(BIN_ROOT)
+.PHONY : cleand
+cleand:
+	rm -r core

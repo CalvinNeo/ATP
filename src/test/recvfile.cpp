@@ -21,16 +21,21 @@
 #include "../udp_util.h"
 #include <iostream>
 
+FILE * fout;
+
 ATP_PROC_RESULT data_arrived(atp_callback_arguments * args){
     atp_socket * socket = args->socket;
     size_t length = args->length; 
     const char * data = args->data;
 
-    printf("data arrived: %.*s\n", length, data);
+    fprintf(fout, "%.*s", length, data);
+    
     return ATP_PROC_OK;
 }
 
 int main(){
+    fout = fopen("out.dat", "w");
+
     uint16_t serv_port = 9876;
     struct sockaddr_in cli_addr; socklen_t cli_len = sizeof(cli_addr);
     struct sockaddr_in srv_addr;
@@ -63,5 +68,7 @@ int main(){
             break;
         }
     }
+
+    fclose(fout);
     return 0;
 }

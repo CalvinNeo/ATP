@@ -199,8 +199,8 @@ void print_out(ATPSocket * socket, OutgoingPacket * out_pkt, const char * method
         fprintf(stdout, "%5s %8s %5s %10s %10s %10s\n"
             , "method", "ts", "flag", "seq", "payload", "ack");
     }
-    fprintf(stdout, "%5s %8I64d %5s %10u %10u %10u\n"
-        , method, (int64_t)(get_current_ms() - socket->context->start_ms), type.c_str(), pkt->seq_nr, out_pkt->payload, pkt->ack_nr);
+    fprintf(stdout, "%5s %8lld %5s %10u %10u %10u\n"
+        , method, (long long)(get_current_ms() - socket->context->start_ms), type.c_str(), pkt->seq_nr, out_pkt->payload, pkt->ack_nr);
 }
 
 

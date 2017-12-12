@@ -317,10 +317,10 @@ struct ATPSocket{
 
     // this is byte-wise, set by peer
     // by default = MAX_ATP_READ_BUFFER_SIZE
-    size_t cur_window = MAX_ATP_READ_BUFFER_SIZE;
+    size_t cur_window = ATP_MAX_READ_BUFFER_SIZE;
     // this is byte-wise, payload of in-flight packets + payload of needing to be re-sent packets
     size_t used_window = 0;
-    size_t my_window = MAX_ATP_READ_BUFFER_SIZE;
+    size_t my_window = ATP_MAX_WRITE_BUFFER_SIZE;
     
     // determined by MTU
     size_t current_mss = ATP_MSS_CEILING;
@@ -464,12 +464,37 @@ struct ATPContext{
         delete socket;
     }
 
-    void daily_routine(){
+    ATP_PROC_RESULT daily_routine(){
+        // notify all exsiting sockets
+        ATP_PROC_RESULT result = ATP_PROC_OK;
+        for(ATPSocket * socket: this->sockets){
+            ATP_PROC_RESULT sub_result = socket->check_timeout();
+            if (sub_result == ATP_PROC_ERROR)
+            {
+                result = ATP_PROC_ERROR;
+            }else if (sub_result == ATP_PROC_OK)
+            {
+                result = ATP_PROC_OK;
+            }else if (sub_result == ATP_PROC_FINISH)
+            {
+                // one socket calling on finish don't mean finishing
+                // because other sockets may still processing
+                result = ATP_PROC_OK;
+            }else{
+                result = ATP_PROC_OK;
+            }
+        } 
         // clear destroyed sockets
         for(ATPSocket * socket : destroyed_sockets){
             destroy(socket);
         }
         destroyed_sockets.clear();
+        if (this->sockets.size() == 0)
+        {
+            return ATP_PROC_FINISH;
+        }else{
+            return result;
+        }
     }
 
     ATPSocket * find_socket_by_fd(const ATPAddrHandle & handle_to, int sockfd);

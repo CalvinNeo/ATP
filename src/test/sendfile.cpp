@@ -36,25 +36,21 @@ int main(){
     srv_addr = make_socketaddr_in(AF_INET, "127.0.0.1", serv_port);
     atp_connect(socket, (const SA *)&srv_addr, sizeof srv_addr);
 
+    FILE * fin = fopen("in.dat", "r");
+
     while (true) {
         sockaddr * psock_addr = (SA *)&srv_addr;
-        // MUST firstly run `atp_process_udp`, then run fgets.
-        // if inverse this order, then `atp_process_udp` will always need to re-send the last packet sent by `atp_write`
-        // because peer can't immediately send back an ACK
         if ((n = recvfrom(sockfd, msg, ATP_MAX_READ_BUFFER_SIZE, 0, psock_addr, &srv_len)) >= 0){
             ATP_PROC_RESULT result = atp_process_udp(context, sockfd, msg, n, (const SA *)&srv_addr, srv_len);
             if (result == ATP_PROC_FINISH )
             {
-                // peer closed message, this would never happen, because I'm always the first to close
-                // even if peer terminates, don't need to call `atp_close` or `atp_async_close` here, 
-                // because already handled in callback ATP_CALL_ON_PEERCLOSE
                 break;
             }
         }else{
             if(!(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN)) break;
         }
-        if(fgets(textmsg, ATP_MIN_BUFFER_SIZE, stdin) == NULL){
-            if (feof(stdin)){
+        if(fgets(textmsg, ATP_MIN_BUFFER_SIZE, fin) == NULL){
+            if (feof(fin)){
                 atp_close(socket);
                 break;
             }else{
@@ -64,5 +60,6 @@ int main(){
         n = strlen(textmsg);
         atp_write(socket, textmsg, n);
     }
+    fclose(fin);
     return 0;
 };

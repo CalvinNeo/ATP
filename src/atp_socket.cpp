@@ -415,7 +415,7 @@ size_t ATPSocket::bytes_can_send_once() const {
     {
         return 0;
     }
-    return std::min(cur_window - used_window, MAX_ATP_WRITE_BUFFER_SIZE);
+    return std::min(cur_window - used_window, ATP_MAX_WRITE_BUFFER_SIZE);
 }
 size_t ATPSocket::bytes_can_send_one_packet() const {
     return std::min(bytes_can_send_once(), current_mss);
@@ -429,7 +429,7 @@ ATP_PROC_RESULT ATPSocket::write(const void * buf, const size_t len){
         #endif
         return ATP_PROC_ERROR;
     }
-    if (len > MAX_ATP_WRITE_BUFFER_SIZE)
+    if (len > ATP_MAX_WRITE_BUFFER_SIZE)
     {
         #if defined (ATP_LOG_AT_DEBUG)
             log_debug(this, "ERROR: Package reject because it's too big for ATP's writting buffer.");
@@ -583,7 +583,8 @@ ATP_PROC_RESULT ATPSocket::update_myack(OutgoingPacket * recv_pkt){
     cur_window = recv_pkt->get_head()->window_size;
     if (recv_pkt->payload == 0)
     {
-        // only ack counts
+        // peer don't send data, this packet only tell us ack number, for our `do_ack_packet` function
+        // it's seq_nr maybe repeated
         action = ATP_PROC_OK;
         #if defined (ATP_LOG_AT_DEBUG)
             log_debug(this, "This is a empty packet with repeated seq_nr:%u ack_nr:%u, my ack is:%u."
@@ -759,6 +760,7 @@ ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buff
     do_ack_packet(recv_pkt);
     switch(action){
         case ATP_PROC_DROP:
+        {
             #if defined (ATP_LOG_AT_DEBUG)
                 log_debug(this, "Drop packet, peer_seq:%u, my ack:%u", recv_pkt->get_head()->seq_nr, ack_nr);
             #endif
@@ -767,8 +769,12 @@ ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buff
             #endif
             delete recv_pkt;
             recv_pkt = nullptr;
+            // maybe peer has not receive my ACK, so it keep re-sending
+            OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
+            send_packet(out_pkt);
             result = ATP_PROC_OK;
             break;
+        }
         case ATP_PROC_OK:
             result = this->receive(recv_pkt);
             break;
@@ -783,6 +789,9 @@ ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buff
             // handled near the end of this function
             break;
     }
+    #if defined (ATP_LOG_AT_DEBUG)
+        log_debug(this, "After handled this packet, there are %u left in inbuf: %u", inbuf.size());
+    #endif
     if (action == ATP_PROC_OK)
     {
         // check if there is any packet which can be acked
@@ -863,7 +872,8 @@ ATP_PROC_RESULT ATPSocket::do_ack_packet(OutgoingPacket * recv_pkt){
         if (out_pkt->get_head()->seq_nr <= my_seq_acked_by_peer)
         {
             #if defined (ATP_LOG_AT_DEBUG)
-                log_debug(this, "Remove ATPPackct seq_nr:%u from buffer, %u packet remain.", out_pkt->get_head()->seq_nr, outbuf.size());
+                log_debug(this, "Removing ATPPackct seq_nr:%u from buffer, peer_ack:%u, %u packet remain(including me)."
+                    , out_pkt->get_head()->seq_nr, my_seq_acked_by_peer, outbuf.size());
             #endif
             update_rto(out_pkt);
             std::pop_heap(outbuf.begin(), outbuf.end(), _cmp_outgoingpacket());
@@ -884,8 +894,9 @@ void ATPSocket::update_rto(OutgoingPacket * recv_pkt){
         uint64_t new_rtt = get_current_ms() - recv_pkt->timestamp;
         this->rtt = static_cast<uint32_t>(alpha * rtt + (1 - alpha) * new_rtt);
         uint32_t computed_rto = static_cast<uint32_t>(2 * this->rtt);
-        this->rto = std::max(computed_rto, static_cast<uint32_t>(ATP_RTO_MIN));
-        this->rto = std::min(computed_rto, static_cast<uint32_t>(ATP_RTO_MAX));
+        this->rto = computed_rto;
+        this->rto = std::max(this->rto, static_cast<uint32_t>(ATP_RTO_MIN));
+        this->rto = std::min(this->rto, static_cast<uint32_t>(ATP_RTO_MAX));
         #if defined (ATP_LOG_AT_DEBUG)
             log_debug(this, "Computed new rtt:%u rto:%u, choose rto:%u.", this->rtt, computed_rto, this->rto);
         #endif
@@ -908,6 +919,7 @@ ATP_PROC_RESULT ATPSocket::check_timeout(){
     {
         if (!outbuf.empty())
         {
+            rto *= 2;
             #if defined (ATP_LOG_AT_DEBUG)
                 log_debug(this, "Retransmit all %u un-acked packet", outbuf.size());
             #endif

@@ -26,7 +26,7 @@
 // They use socket->sys_cache rather than user's cache
 // because no user data is passed during such process
 // so 1024 bytes are enough, which is less than ATP_MSS_CEILING for ordinary ATP Packets
-#define ATP_SYSCACHE_MAX 512
+#define ATP_SYSCACHE_MAX 64
 
 #if defined __GNUC__
     #define PACKED_ATTRIBUTE __attribute__((__packed__))
@@ -145,14 +145,14 @@ struct PACKED_ATTRIBUTE CATPPacket{
 #define TCP_DEFAULT_MSS 536
 static const size_t MAX_UDP_PAYLOAD = 65535 - IPV4_HEADER_SIZE - UDP_HEADER_SIZE;
 // The size of ATP's write buffer
-static const size_t MAX_ATP_WRITE_BUFFER_SIZE = ATP_IP_MTU;
-static const size_t MAX_ATP_READ_BUFFER_SIZE = ATP_IP_MTU;
+static const size_t ATP_MAX_WRITE_BUFFER_SIZE = ATP_IP_MTU;
+static const size_t ATP_MAX_READ_BUFFER_SIZE = ATP_IP_MTU;
 // The "MSS" to avoid IP fragmentation, range from [ATP_MSS_CEILING, ATP_MSS_FLOOR]
 static const size_t ATP_MIN_BUFFER_SIZE = ETHERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE + 1;
 static const size_t ATP_MSS_CEILING = ETHERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE - sizeof(CATPPacket);
 static const size_t ATP_MSS_FLOOR = INTERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE - sizeof(CATPPacket);
 
-#define ATP_RTO_MIN 200
+#define ATP_RTO_MIN 1000
 #define ATP_RTO_MAX 120000
 
 #ifdef __cplusplus
