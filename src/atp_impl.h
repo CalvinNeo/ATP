@@ -146,12 +146,14 @@ struct PACKED_ATTRIBUTE ATPPacket : public CATPPacket{
         }
         return true;
     }
+
+    uint32_t get_full_seq_nr(ATPSocket * socket) const;
 };
 
 static_assert(std::is_trivial<ATPPacket>::value, "ATPPacket is not trivial");
 static_assert(std::is_pod<ATPPacket>::value, "ATPPacket is not pod");
 static_assert(std::is_aggregate<ATPPacket>::value, "ATPPacket is not aggregate");
-static_assert(sizeof(ATPPacket) == 14, "ATPPacket's size is not equal to 14");
+static_assert(sizeof(ATPPacket) == 10, "ATPPacket's size is not equal to 10");
 
 extern const char * CONN_STATE_STRS [];
 
@@ -249,6 +251,7 @@ struct OutgoingPacket{
     void destroy(){
         // TODO now manually managing memory, swith to smart pointers later
         std::free(data);
+        data = nullptr;
     }
 
     ATPPacket * get_head(){
@@ -292,13 +295,16 @@ struct ATPSocket{
         }  
     }; 
     std::priority_queue<OutgoingPacket*, std::vector<OutgoingPacket*>, _cmp_outgoingpacket> inbuf;
-    // std::priority_queue<OutgoingPacket*, std::vector<OutgoingPacket*>, _cmp_outgoingpacket> outbuf;
     std::vector<OutgoingPacket*> outbuf;
 
     // my seq number
-    uint32_t seq_nr = 1;
+    uint32_t seq_nr = 0;
     // peer's seq number acked by me
     uint32_t ack_nr = 0;
+    bool zero_lock = false;
+    static const uint32_t seq_nr_mask = 0xffff;
+    // when peer's seq_nr wrap to 0, peer_seq_nr_base += std::numeric_limits<T>::max()
+    uint32_t peer_seq_nr_base = 0;
     // my seq number acked by peer
     uint32_t my_seq_acked_by_peer = 0;
 
@@ -307,6 +313,7 @@ struct ATPSocket{
     uint32_t rto = 3000;
     uint64_t rto_timeout = 0; // at this exact time(ms) will this socket timeout
     uint64_t death_timeout = 0; // at this exact time change from TIME_WAIT to DESTROY
+    uint64_t persist_timeout = 0; 
 
     // Not used yet
     uint32_t cur_window_packets = 0; 
@@ -348,6 +355,7 @@ struct ATPSocket{
         for(OutgoingPacket * op : outbuf){
             delete op;
         }
+        outbuf.clear();
         while(!inbuf.empty()){
             delete inbuf.top();
             inbuf.pop();
@@ -365,6 +373,9 @@ struct ATPSocket{
     void reset_timer(){
 
     }
+
+    ATP_PROC_RESULT send_packet_unchecked(OutgoingPacket * out_pkt);
+    void check_unsend_packet();
     // `send_packet` will take over possession of `out_pkt`
     ATP_PROC_RESULT send_packet(OutgoingPacket * out_pkt);
     ATP_PROC_RESULT close();
@@ -386,6 +397,9 @@ struct ATPSocket{
     ATP_PROC_RESULT invoke_callback(int callback_type, atp_callback_arguments * args);
     // update my_seq_acked_by_peer
     ATP_PROC_RESULT do_ack_packet(OutgoingPacket * recv_pkt);
+    uint32_t get_full_seq_nr(uint32_t raw_peer_seq_nr){
+        return raw_peer_seq_nr + peer_seq_nr_base;
+    }
     void update_rto(OutgoingPacket * recv_pkt);
     void destroy();
     ATP_PROC_RESULT check_timeout();
@@ -430,7 +444,11 @@ struct ATPContext{
         clear();
     }
 
-    uint64_t msl2 = 3000;
+    // because we have peer_sock_id in ATPPacket, 
+    // so we don't need to wait actually 2msl, 
+    // waiting for rto time is enough. 
+    // But you can still set a minimum
+    uint32_t min_msl2 = 2000;
     size_t opt_sndbuf;
     size_t opt_rcvbuf;
 

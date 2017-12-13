@@ -130,8 +130,7 @@ struct atp_iovec {
 struct PACKED_ATTRIBUTE CATPPacket{
     // ATP packet layout, trivial
     // seq_nr and ack_nr are now packet-wise rather than byte-wise
-    uint32_t seq_nr;
-    uint32_t ack_nr;
+    uint16_t seq_nr; uint16_t ack_nr;
     uint16_t peer_sock_id; uint16_t flags;
     uint16_t window_size;
 };
@@ -154,6 +153,8 @@ static const size_t ATP_MSS_FLOOR = INTERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER
 
 #define ATP_RTO_MIN 1000
 #define ATP_RTO_MAX 120000
+// Time event interval is close to ATP_RTO_MIN may cause re-sending
+#define ATP_TIMEEVENT_INTERVAL_MAX 500
 
 #ifdef __cplusplus
 }

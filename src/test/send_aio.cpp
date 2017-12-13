@@ -34,7 +34,6 @@ char textmsg[ATP_MIN_BUFFER_SIZE];
 atp_context * context;
 
 bool closed = false;
-bool end = false;
 
 void aio_completion_handler(sigval_t sigval)
 {
@@ -93,7 +92,7 @@ int main(){
         }
         n = strlen(textmsg);
         atp_write(socket, textmsg, n);
-        sleep(1); // sleep 1000ms
+        usleep(500 * 1000); // sleep 500ms
     }
     return 0;
 };
