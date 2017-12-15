@@ -314,8 +314,10 @@ struct ATPSocket{
             return left->marked == false ? true: false;  
         }  
     }; 
-    std::priority_queue<OutgoingPacket*, std::vector<OutgoingPacket*>, _cmp_outgoingpacket> inbuf;
+    // std::priority_queue<OutgoingPacket*, std::vector<OutgoingPacket*>, _cmp_outgoingpacket> inbuf;
     std::vector<OutgoingPacket*> outbuf;
+    std::vector<OutgoingPacket*> inbuf;
+
 
     // my seq number
     uint32_t seq_nr = 0;
@@ -330,7 +332,7 @@ struct ATPSocket{
 
     uint32_t rtt = 0;
     uint32_t rtt_var = 800; // Default 800
-    uint32_t rto = 1000; // Default 3000, recommend no less than timer event interval
+    uint32_t rto = 2000; // Default 3000, recommend no less than timer event interval
     uint64_t rto_timeout = 0; // at this exact time(ms) will this socket timeout
     uint64_t death_timeout = 0; // at this exact time change from TIME_WAIT to DESTROY
     uint64_t persist_timeout = 0; // at this exact time probe peer's window
@@ -342,7 +344,7 @@ struct ATPSocket{
     uint16_t atp_syn_retries1 = 5;
 
     // Not used yet
-    uint32_t cur_window_packets = 0; 
+    uint32_t cur_window_packets = 1; 
     // the number of packets in the send queue
     // including unsend and un-acked packets
     // the oldest un-acked packet in the send queue is seq_nr - used_window_packets
@@ -382,10 +384,10 @@ struct ATPSocket{
             delete op;
         }
         outbuf.clear();
-        while(!inbuf.empty()){
-            delete inbuf.top();
-            inbuf.pop();
+        for(OutgoingPacket * op : inbuf){
+            delete op;
         }
+        inbuf.clear();
     }
     // called by atp_create_socket
     int init(int family, int type, int protocol);
@@ -474,7 +476,7 @@ struct ATPContext{
     // so we don't need to wait actually 2msl, 
     // waiting for rto time is enough. 
     // But you can still set a minimum
-    uint32_t min_msl2 = 3000; 
+    uint32_t min_msl2 = 6000; 
 
     std::vector<ATPSocket *> sockets;
     std::map<std::string, ATPSocket *> look_up;

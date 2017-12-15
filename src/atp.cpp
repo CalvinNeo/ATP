@@ -49,9 +49,9 @@ static ATP_PROC_RESULT sys_loop(atp_socket * socket, std::function<int(atp_socke
     while (true) {
         struct sockaddr_in peer_addr; socklen_t peer_len = sizeof(peer_addr);
         sockaddr * ppeer_addr = (SA *)&peer_addr;
-        // struct timeval tv;
-        // tv.tv_sec = 5;
-        // setsockopt(socket->sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        struct timeval tv;
+        tv.tv_sec = 5;
+        setsockopt(socket->sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         int n = recvfrom(socket->sockfd, socket->sys_cache, ATP_SYSCACHE_MAX, 0, ppeer_addr, &peer_len);
         if (n < 0){
             if(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN){
@@ -59,7 +59,10 @@ static ATP_PROC_RESULT sys_loop(atp_socket * socket, std::function<int(atp_socke
             }else{
                 break;
             }
-        }else{
+        }else{    
+            #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
+                log_debug(socket, "sys_loop Recv %d bytes.", n);
+            #endif
             ATPAddrHandle handle_to(reinterpret_cast<const SA *>(&peer_addr));
             socket->process(handle_to, socket->sys_cache, n);
         }
@@ -124,8 +127,19 @@ ATP_PROC_RESULT atp_listen(atp_socket * socket, uint16_t host_port){
 
 ATP_PROC_RESULT atp_accept(atp_socket * socket){
     return sys_loop(socket, [](atp_socket * socket){
-        if (socket->conn_state >= CS_CONNECTED)
+        if (socket->conn_state >= CS_SYN_RECV)
         {
+            // IMPORTANT:
+            // DO NOT wait until the last handshake, the ACK packet from peer
+            // because that ACK may contains with data, according to Delay ACK strategy.
+            // sys_loop UDP Recv 12 bytes.
+            //     method       ts   flag        seq    payload        ack
+            //        rcv     1507      S      31252          2          0
+            //        snd     1507     SA      50090          2      31252
+            // UDP Send 12 bytes.
+            // sys_loop UDP Recv 64 bytes.
+            //        rcv     2509     AD      31253         54      50090
+            //        snd     3001      A      50090          0      31253
             return ATP_PROC_OK;
         }else if(socket->conn_state == CS_DESTROY){
             return ATP_PROC_FINISH;

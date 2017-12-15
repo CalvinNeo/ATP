@@ -45,7 +45,6 @@ int main(){
     }
 
     FILE * fin = fopen("in.dat", "r");
-
     while (true) {
         sockaddr * psock_addr = (SA *)&srv_addr;
         if ((n = recvfrom(sockfd, msg, ATP_MAX_READ_BUFFER_SIZE, 0, psock_addr, &srv_len)) >= 0){
