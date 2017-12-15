@@ -241,6 +241,7 @@ struct OutgoingPacket{
             destroy();
     }
     bool holder = true;
+    bool marked = false;
     size_t length = 0; // length of the whole
     size_t payload = 0;
     uint64_t timestamp; // microseconds
@@ -253,7 +254,19 @@ struct OutgoingPacket{
         std::free(data);
         data = nullptr;
     }
-
+    bool is_empty_ack() const{
+        return (get_head()->get_ack() && payload == 0 && !(get_head()->get_syn() || get_head()->get_fin()));
+    }
+    bool has_user_data() const{
+        if (payload == 0)
+        {
+            return false;
+        }
+        if(get_head()->get_syn() || get_head()->get_fin()){
+            return false;
+        }
+        return true;
+    }
     ATPPacket * get_head(){
         return reinterpret_cast<ATPPacket *>(data);
     }
@@ -266,7 +279,7 @@ struct ATPSocket{
     ATPContext * context = nullptr;
     // function as "port"
     uint16_t sock_id;
-    uint16_t peer_sock_id;
+    uint16_t peer_sock_id = 0;
 
     mutable ATPAddrHandle src_addr;
     ATPAddrHandle & get_src_addr(){
@@ -294,6 +307,13 @@ struct ATPSocket{
             return left->get_head()->seq_nr > right->get_head()->seq_nr;  
         }  
     }; 
+    struct _cmp_outgoingpacket_marked{  
+        bool operator()(OutgoingPacket * left, OutgoingPacket * right){  
+            if(left->marked == right->marked)  return left > right;  
+            // false | false | ... | true
+            return left->marked == false ? true: false;  
+        }  
+    }; 
     std::priority_queue<OutgoingPacket*, std::vector<OutgoingPacket*>, _cmp_outgoingpacket> inbuf;
     std::vector<OutgoingPacket*> outbuf;
 
@@ -309,11 +329,17 @@ struct ATPSocket{
     uint32_t my_seq_acked_by_peer = 0;
 
     uint32_t rtt = 0;
-    uint32_t rtt_var = 800;
-    uint32_t rto = 3000;
+    uint32_t rtt_var = 800; // Default 800
+    uint32_t rto = 1000; // Default 3000, recommend no less than timer event interval
     uint64_t rto_timeout = 0; // at this exact time(ms) will this socket timeout
     uint64_t death_timeout = 0; // at this exact time change from TIME_WAIT to DESTROY
-    uint64_t persist_timeout = 0; 
+    uint64_t persist_timeout = 0; // at this exact time probe peer's window
+    uint32_t ack_delayed_time = 200;
+    uint64_t delay_ack_timeout = 0; // at this exact time send delayed ACK
+
+    uint16_t atp_retries1 = 3; // TCP RFC recommends 3
+    uint16_t atp_retries2 = 10; // TCP RFC recommends 15
+    uint16_t atp_syn_retries1 = 5;
 
     // Not used yet
     uint32_t cur_window_packets = 0; 
@@ -374,7 +400,7 @@ struct ATPSocket{
 
     }
 
-    ATP_PROC_RESULT send_packet_unchecked(OutgoingPacket * out_pkt);
+    ATP_PROC_RESULT send_packet_noguard(OutgoingPacket * out_pkt);
     void check_unsend_packet();
     // `send_packet` will take over possession of `out_pkt`
     ATP_PROC_RESULT send_packet(OutgoingPacket * out_pkt);
@@ -448,9 +474,7 @@ struct ATPContext{
     // so we don't need to wait actually 2msl, 
     // waiting for rto time is enough. 
     // But you can still set a minimum
-    uint32_t min_msl2 = 2000;
-    size_t opt_sndbuf;
-    size_t opt_rcvbuf;
+    uint32_t min_msl2 = 3000; 
 
     std::vector<ATPSocket *> sockets;
     std::map<std::string, ATPSocket *> look_up;
@@ -460,7 +484,11 @@ struct ATPContext{
     uint64_t start_ms;
 
     uint16_t new_sock_id(){
-        return std::rand();
+        uint16_t s = 0;
+        while(s == 0){
+            s = std::rand();
+        }
+        return s;
     }
 
     void destroy(ATPSocket * socket){
@@ -507,8 +535,12 @@ struct ATPContext{
             destroy(socket);
         }
         destroyed_sockets.clear();
+
         if (this->sockets.size() == 0)
         {
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Destroying context.");
+            #endif
             return ATP_PROC_FINISH;
         }else{
             return result;

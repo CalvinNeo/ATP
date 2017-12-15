@@ -34,7 +34,9 @@ int main(){
     int sockfd = atp_getfd(socket);
 
     srv_addr = make_socketaddr_in(AF_INET, "127.0.0.1", serv_port);
-    atp_connect(socket, (const SA *)&srv_addr, sizeof srv_addr);
+    if(atp_connect(socket, (const SA *)&srv_addr, sizeof srv_addr) != ATP_PROC_OK){
+        puts("Connection Abort.");
+    }
 
     while (true) {
         sockaddr * psock_addr = (SA *)&srv_addr;

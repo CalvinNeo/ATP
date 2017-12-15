@@ -189,17 +189,25 @@ void print_out(ATPSocket * socket, OutgoingPacket * out_pkt, const char * method
     {
         type += "A";
     }
-    if (out_pkt->payload > 0 && !pkt->get_syn())
+    if (pkt->get_rst())
+    {
+        type += "R";
+    }
+    if (pkt->get_urg())
+    {
+        type += "U";
+    }
+    if (out_pkt->has_user_data())
     {
         type += "D";
     }
     if (!flag)
     {
         flag = true;
-        fprintf(stdout, "%6s %8s %5s %10s %10s %10s\n"
+        fprintf(stdout, "%10s %8s %6s %10s %10s %10s\n"
             , "method", "ts", "flag", "seq", "payload", "ack");
     }
-    fprintf(stdout, "%6s %8lld %5s %10u %10u %10u\n"
+    fprintf(stdout, "%10s %8lld %6s %10u %10u %10u\n"
         , method, (long long)(get_current_ms() - socket->context->start_ms), type.c_str(), pkt->seq_nr, out_pkt->payload, pkt->ack_nr);
 }
 

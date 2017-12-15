@@ -17,10 +17,39 @@
 *   with this program; if not, write to the Free Software Foundation, Inc.,
 *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 */
-
+#include "atp.h"
 #include "atp_impl.h"
 #include "udp_util.h"
+#include <random>
 
+auto normal_sendto = [](atp_callback_arguments * args){
+    atp_socket * socket = args->socket;
+    const struct sockaddr * sa = args->addr;
+    ATPPacket * pkt = (ATPPacket *)args->data;
+    int n = sendto(socket->sockfd, args->data, args->length, 0, sa, args->addr_len);
+    #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
+        // const sockaddr_in * sk = (const sockaddr_in *)sa;
+        ATPAddrHandle handle(sa);
+        log_debug(socket, "Call sendto :%s, UDP Send %u bytes.", handle.to_string(), args->addr_len);
+    #endif
+    if(n != args->length){
+        return ATP_PROC_ERROR;
+    }else{
+        return ATP_PROC_OK;
+    }
+};
+auto simulate_packet_loss_sendto = [](atp_callback_arguments * args) -> ATP_PROC_RESULT{
+    static std::default_random_engine e{get_current_ms()};
+    static std::uniform_real_distribution<double> u{0, 1};
+    double drop_rate_judge = u(e);
+    if (drop_rate_judge < 0.5)
+    {
+        puts("simulated packet loss");
+        return ATP_PROC_OK;
+    }else{
+        return normal_sendto(args);
+    }
+};
 void init_callbacks(ATPSocket * socket){
     socket->callbacks[ATP_CALL_ON_ERROR] = nullptr; 
     socket->callbacks[ATP_CALL_ON_STATE_CHANGE] = nullptr;
@@ -45,24 +74,7 @@ void init_callbacks(ATPSocket * socket){
             return ATP_PROC_OK;
         }
     };
-    socket->callbacks[ATP_CALL_SENDTO] = [](atp_callback_arguments * args){
-        atp_socket * socket = args->socket;
-        const struct sockaddr * sa = args->addr;
-        ATPPacket * pkt = (ATPPacket *)args->data;
-        int n = sendto(socket->sockfd, args->data, args->length, 0, sa, args->addr_len);
-        #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
-            // const sockaddr_in * sk = (const sockaddr_in *)sa;
-            ATPAddrHandle handle(sa);
-            #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
-                log_debug(socket, "Call sendto :%s, UDP Send %u bytes.", handle.to_string(), args->addr_len);
-            #endif
-        #endif
-        if(n != args->length){
-            return ATP_PROC_ERROR;
-        }else{
-            return ATP_PROC_OK;
-        }
-    };
+    socket->callbacks[ATP_CALL_SENDTO] = simulate_packet_loss_sendto;
     socket->callbacks[ATP_CALL_ON_RECV] = nullptr;
     socket->callbacks[ATP_CALL_ON_PEERCLOSE] = [](atp_callback_arguments * args){
         atp_socket * socket = args->socket;

@@ -33,8 +33,16 @@ int main(){
     atp_socket * socket = atp_create_socket(context);
     int sockfd = atp_getfd(socket);
 
+
+    // char ip_addr_str[1000]; // "172.19.143.183"
+    // printf("please input dest ip_addr\n");
+    // scanf("%s", ip_addr_str);
     srv_addr = make_socketaddr_in(AF_INET, "127.0.0.1", serv_port);
-    atp_connect(socket, (const SA *)&srv_addr, sizeof srv_addr);
+    int res = atp_connect(socket, (const SA *)&srv_addr, sizeof srv_addr);
+    if(res != ATP_PROC_OK){
+        printf("Connection Abort.\n");
+        return 0;
+    }
 
     FILE * fin = fopen("in.dat", "r");
 

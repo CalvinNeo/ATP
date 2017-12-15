@@ -54,7 +54,10 @@ int main(){
         err_sys("bind error");
 
     atp_listen(socket, serv_port);
-    atp_accept(socket);
+    if(atp_accept(socket) != ATP_PROC_OK){
+        puts("Connection Abort.");
+        return 0;
+    }
 
     while (true) {
         sockaddr * pcli_addr = (SA *)&cli_addr;

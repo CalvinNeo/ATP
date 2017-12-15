@@ -34,7 +34,9 @@
 *.log
 *.tags*
 *.dat
+*.out
 
 bin/
 udp_test/
 core
+src/logs

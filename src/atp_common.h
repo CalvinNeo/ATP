@@ -77,6 +77,7 @@ enum {
     ATP_PROC_CACHE = -3,
     ATP_PROC_DROP = -4,
     ATP_PROC_REJECT = -5,
+    ATP_PROC_WAIT = -6,
 };
 
 // typedef all interface struct to snakecase
@@ -152,7 +153,8 @@ static const size_t ATP_MSS_CEILING = ETHERNET_MTU - IPV4_HEADER_SIZE - UDP_HEAD
 static const size_t ATP_MSS_FLOOR = INTERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE - sizeof(CATPPacket);
 
 #define ATP_RTO_MIN 1000
-#define ATP_RTO_MAX 120000
+// TCP recommends 120000
+#define ATP_RTO_MAX 6000
 // Time event interval is close to ATP_RTO_MIN may cause re-sending
 #define ATP_TIMEEVENT_INTERVAL_MAX 500
 

@@ -27,24 +27,31 @@ atp_context * atp_init(){
     return &get_context();
 }
 
+static sigfunc_t * origin_sigfunc;
 static void alarm_handler(int interval){
     ATP_PROC_RESULT result = atp_timer_event(&get_context(), 1000);
     if (result == ATP_PROC_FINISH)
     {
         // stop triggering
+        alarm(0);
+        setup_signal(SIGALRM, origin_sigfunc);
     }else{
         alarm(1);
     }
 }
 
 static ATP_PROC_RESULT sys_loop(atp_socket * socket, std::function<int(atp_socket*)> predicate){ 
-    sigfunc_t * origin_sigfunc = setup_signal(SIGALRM, alarm_handler);
+    // sys loop with blocked socket
+    ATP_PROC_RESULT result; 
+    origin_sigfunc = setup_signal(SIGALRM, alarm_handler);
     alarm(1);
-
     socket->sys_cache = new char [ATP_SYSCACHE_MAX];
     while (true) {
         struct sockaddr_in peer_addr; socklen_t peer_len = sizeof(peer_addr);
         sockaddr * ppeer_addr = (SA *)&peer_addr;
+        // struct timeval tv;
+        // tv.tv_sec = 5;
+        // setsockopt(socket->sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         int n = recvfrom(socket->sockfd, socket->sys_cache, ATP_SYSCACHE_MAX, 0, ppeer_addr, &peer_len);
         if (n < 0){
             if(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN){
@@ -56,18 +63,21 @@ static ATP_PROC_RESULT sys_loop(atp_socket * socket, std::function<int(atp_socke
             ATPAddrHandle handle_to(reinterpret_cast<const SA *>(&peer_addr));
             socket->process(handle_to, socket->sys_cache, n);
         }
-        if (predicate(socket) == ATP_PROC_FINISH)
-        {
-            return ATP_PROC_OK;
-        }else{
+        // TODO: here socket may be already deleted by context
+        result = predicate(socket);
+        if (result == ATP_PROC_FINISH)
+        {   
+            // the whole procedure is finished
+            break;
+        }else if(result == ATP_PROC_WAIT){
             continue;
+        }else if(result == ATP_PROC_OK){
+            break;
         }
     }
     delete [] socket->sys_cache;
     socket->sys_cache = nullptr;
-    alarm(0);
-    setup_signal(SIGALRM, origin_sigfunc);
-    return ATP_PROC_OK;
+    return result;
 }
 
 int atp_getfd(atp_socket * socket){
@@ -94,14 +104,17 @@ ATP_PROC_RESULT atp_connect(atp_socket * socket, const struct sockaddr * to, soc
     ATPAddrHandle handle(to);
     int n;
     socket->connect(to);
-    sys_loop(socket, [](atp_socket * socket){
+    return sys_loop(socket, [](atp_socket * socket){
         if (socket->conn_state >= CS_CONNECTED)
         {
+            return ATP_PROC_OK;
+        }else if(socket->conn_state == CS_DESTROY){
             return ATP_PROC_FINISH;
         }
-        return ATP_PROC_OK;
+        else{
+            return ATP_PROC_WAIT;
+        }
     });
-    return ATP_PROC_OK;
 }
 
 ATP_PROC_RESULT atp_listen(atp_socket * socket, uint16_t host_port){
@@ -110,14 +123,16 @@ ATP_PROC_RESULT atp_listen(atp_socket * socket, uint16_t host_port){
 }
 
 ATP_PROC_RESULT atp_accept(atp_socket * socket){
-    sys_loop(socket, [](atp_socket * socket){
+    return sys_loop(socket, [](atp_socket * socket){
         if (socket->conn_state >= CS_CONNECTED)
         {
+            return ATP_PROC_OK;
+        }else if(socket->conn_state == CS_DESTROY){
             return ATP_PROC_FINISH;
+        }else{
+            return ATP_PROC_WAIT;
         }
-        return ATP_PROC_OK;
     });
-    return ATP_PROC_OK;
 }
 
 ATP_PROC_RESULT atp_write(atp_socket * socket, void * buf, size_t length){
@@ -167,14 +182,14 @@ ATP_PROC_RESULT atp_close(atp_socket * socket){
         log_debug(socket, "User called atp_close");
     #endif
     socket->close();
-    sys_loop(socket, [](atp_socket * socket){
+    return sys_loop(socket, [](atp_socket * socket){
         if (socket->conn_state == CS_DESTROY)
         {
             return ATP_PROC_FINISH;
+        }else{
+            return ATP_PROC_WAIT;
         }
-        return ATP_PROC_OK;
     });
-    return ATP_PROC_OK;
 }
 
 
