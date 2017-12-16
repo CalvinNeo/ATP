@@ -55,7 +55,7 @@ static ATP_PROC_RESULT sys_loop(atp_socket * socket, std::function<int(atp_socke
         int n = recvfrom(socket->sockfd, socket->sys_cache, ATP_SYSCACHE_MAX, 0, ppeer_addr, &peer_len);
         if (n < 0){
             if(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN){
-                // normal
+                // normal, timeout
             }else{
                 break;
             }

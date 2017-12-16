@@ -38,7 +38,7 @@ const char * CONN_STATE_STRS []= {
     "CS_STATE_COUNT"
 };
 
-static std::string tabber(const std::string & src, bool tail_crlf) {
+std::string tabber(const std::string & src, bool tail_crlf) {
     std::string newline;
     std::string ans = "";
     std::istringstream f(src);
@@ -225,7 +225,7 @@ ATPSocket * ATPContext::find_socket_by_fd(const ATPAddrHandle & handle_to, int s
         return socket;
     } else{
         #if defined (ATP_LOG_AT_DEBUG)
-            log_debug(this, "Can't locate listening socket:%u %u", handle_me.host_port());
+            log_debug(this, "Can't locate listening socket:%u", handle_me.host_port());
         #endif
         return nullptr;
     }
@@ -249,7 +249,7 @@ ATPSocket * ATPContext::find_socket_by_head(const ATPAddrHandle & handle_to, ATP
                 ext += '\n';
             }
             log_debug(this, "Can't locate socket:%s, the exsiting %u sockets are: %s\n"
-                , hashing.c_str(), this->look_up.size(), ext.c_str());
+                , hashing.c_str(), this->look_up.size(), tabber(ext).c_str());
         #endif
         return nullptr;
     }

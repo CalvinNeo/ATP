@@ -323,7 +323,7 @@ struct ATPSocket{
     uint32_t seq_nr = 0;
     // peer's seq number acked by me
     uint32_t ack_nr = 0;
-    bool zero_lock = false;
+    bool overflow_lock = false;
     static const uint32_t seq_nr_mask = 0xffff;
     // when peer's seq_nr wrap to 0, peer_seq_nr_base += std::numeric_limits<T>::max()
     uint32_t peer_seq_nr_base = 0;
@@ -561,3 +561,5 @@ inline ATPContext & get_context(){
 void print_out(ATPSocket * socket, OutgoingPacket * out_pkt, const char * method);
 
 void init_callbacks(ATPSocket * socket);
+
+std::string tabber(const std::string & src, bool tail_crlf = true);

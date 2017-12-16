@@ -40,3 +40,7 @@ bin/
 udp_test/
 core
 src/logs
+*.gcov
+*.gcda
+*.gcno
+*.info

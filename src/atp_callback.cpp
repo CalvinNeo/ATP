@@ -42,7 +42,7 @@ auto simulate_packet_loss_sendto = [](atp_callback_arguments * args) -> ATP_PROC
     static std::default_random_engine e{get_current_ms()};
     static std::uniform_real_distribution<double> u{0, 1};
     double drop_rate_judge = u(e);
-    if (drop_rate_judge < 0.3)
+    if (drop_rate_judge < 0.5)
     {
         puts("simulated packet loss");
         return ATP_PROC_OK;

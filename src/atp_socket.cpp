@@ -702,7 +702,7 @@ ATP_PROC_RESULT ATPSocket::update_myack(OutgoingPacket * recv_pkt){
     // When we met a 0, we know that peer's seq_nr wraps.
     // e.g. If our `peer_seq_nr_base` is now 0, and we get a 0 seq_nr
     // I understand the number overflowed. So I update `peer_seq_nr_base` to 256;
-    if (raw_peer_seq == 0 && !zero_lock)
+    if (raw_peer_seq == 0 && !overflow_lock)
     {
         // peer's seq_nr wraps here
         peer_seq_nr_base += (seq_nr_mask + 1);
@@ -711,10 +711,8 @@ ATP_PROC_RESULT ATPSocket::update_myack(OutgoingPacket * recv_pkt){
         #endif
         // because there may be several packets which have seq_nr == 0(one with paylod, others don't)
         // only overflow once
-        zero_lock = true;
-    } else if(raw_peer_seq != 0){
-        zero_lock = false;
-    }
+        overflow_lock = true;
+    } 
     // and then we update peer_seq
     uint32_t peer_seq = get_full_seq_nr(raw_peer_seq);
     // But if then we get a packet who somehow comes later, with an un-overflowed seq_nr?
@@ -990,6 +988,12 @@ ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buff
         }
         case ATP_PROC_OK:
         {
+            if (!recv_pkt->is_empty_ack() && recv_pkt->get_head()->seq_nr == seq_nr_mask)
+            {
+                // The last packet before overflows has been acked. 
+                // It doesn't means there will be no re-sent packet with seq_nr before overflow
+                overflow_lock = false;
+            }
             if(!recv_pkt->get_head()->get_fin()){
                 // Data in FIN pakcet is not user's data
                 result = this->receive(recv_pkt);
@@ -1006,15 +1010,24 @@ ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buff
             #if defined (ATP_LOG_AT_DEBUG)
                 log_debug(this, "Cached packet, ack:%u raw_peer_seq:%u inbuf_size: %u", ack_nr, raw_peer_seq, inbuf.size());
             #endif
-            if (std::find_if(inbuf.begin(), inbuf.end(), [=](OutgoingPacket * op){return op->get_head()->seq_nr == recv_pkt->get_head()->ack_nr;}) == inbuf.end())
+            if (std::find_if(inbuf.begin(), inbuf.end(), 
+                [=](OutgoingPacket * op){
+                    return op->get_head()->seq_nr == recv_pkt->get_head()->seq_nr;
+                }) == inbuf.end())
             {
                 inbuf.push_back(recv_pkt);
                 std::push_heap(inbuf.begin(), inbuf.end(), _cmp_outgoingpacket());
+                #if defined (ATP_LOG_AT_NOTE)
+                    print_out(this, recv_pkt, "cache1");
+                #endif
+            }else{
+                #if defined (ATP_LOG_AT_NOTE)
+                    print_out(this, recv_pkt, "cache-rep");
+                #endif
+                delete recv_pkt;
+                recv_pkt = nullptr;
             }
             result = ATP_PROC_OK;
-            #if defined (ATP_LOG_AT_NOTE)
-                print_out(this, recv_pkt, "cache1");
-            #endif
             break;
         case ATP_PROC_FINISH:
             // handled near the end of this function
@@ -1050,8 +1063,17 @@ ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buff
             }
             else if(action == ATP_PROC_OK)
             {
+                if (!top_packet->is_empty_ack() && top_packet->get_head()->seq_nr == seq_nr_mask)
+                {
+                    // The last packet before overflows has been acked. 
+                    // It doesn't means there will be no re-sent packet with seq_nr before overflow
+                    overflow_lock = false;
+                }
                 #if defined (ATP_LOG_AT_DEBUG)
                     log_debug(this, "Process a cached ATPPacket, peer_seq:%u, my ack:%u", peer_seq, ack_nr);
+                #endif
+                #if defined (ATP_LOG_AT_NOTE)
+                    print_out(this, top_packet, "rcv");
                 #endif
                 if(!top_packet->get_head()->get_fin()){
                     // Data in FIN pakcet is not user's data

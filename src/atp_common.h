@@ -154,7 +154,7 @@ static const size_t ATP_MSS_FLOOR = INTERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER
 
 #define ATP_RTO_MIN 1000
 // TCP recommends 120000
-#define ATP_RTO_MAX 6000
+#define ATP_RTO_MAX 12000
 // Time event interval is close to ATP_RTO_MIN may cause re-sending
 #define ATP_TIMEEVENT_INTERVAL_MAX 500
 
