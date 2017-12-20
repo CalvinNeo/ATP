@@ -49,23 +49,31 @@ int main(){
         sockaddr * psock_addr = (SA *)&srv_addr;
         if ((n = recvfrom(sockfd, msg, ATP_MAX_READ_BUFFER_SIZE, 0, psock_addr, &srv_len)) >= 0){
             ATP_PROC_RESULT result = atp_process_udp(context, sockfd, msg, n, (const SA *)&srv_addr, srv_len);
-            if (result == ATP_PROC_FINISH )
+            if (result == ATP_PROC_FINISH)
             {
                 break;
             }
         }else{
             if(!(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN)) break;
-        }
-        if(fgets(textmsg, ATP_MIN_BUFFER_SIZE, fin) == NULL){
-            if (feof(fin)){
-                atp_close(socket);
+            if(atp_timer_event(context, 1000) == ATP_PROC_FINISH){
                 break;
-            }else{
-                continue;
             }
         }
-        n = strlen(textmsg);
-        atp_write(socket, textmsg, n);
+        if(!feof(fin)){
+            if(fgets(textmsg, ATP_MIN_BUFFER_SIZE, fin) == NULL){
+                continue;
+            }else{
+                n = strlen(textmsg);
+                atp_write(socket, textmsg, n);
+            }
+        }else{
+            if (atp_send_status(socket) == ATP_PROC_OK)
+            {
+                puts("Trans Finished");
+                atp_close(socket);
+                break;
+            }
+        }
     }
     fclose(fin);
     return 0;

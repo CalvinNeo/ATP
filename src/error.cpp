@@ -26,15 +26,10 @@ using namespace std;
 
 static void err_doit(int errnoflag, int level, const char *fmt, va_list ap)
 {
-    int errno_save, n;
-    char buf[MAXLINE + 1];
-
+    int errno_save, n; char buf[MAXLINE + 1];
     errno_save = errno; 
     vsnprintf(buf, MAXLINE, fmt, ap);
-    
-    fflush(stdout);
-    fputs(buf, stderr);
-    fflush(stderr);
+    fflush(stdout); fputs(buf, stderr); fflush(stderr);
     return;
 }
 

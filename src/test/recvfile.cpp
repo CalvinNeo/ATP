@@ -19,7 +19,6 @@
 */
 #include "../atp.h"
 #include "../udp_util.h"
-#include <iostream>
 
 FILE * fout;
 
@@ -33,7 +32,27 @@ ATP_PROC_RESULT data_arrived(atp_callback_arguments * args){
     return ATP_PROC_OK;
 }
 
+static void sigterm_handler(int signum)
+{
+    exit(0);
+}
+
+void reg_sigterm_handler(void (*handler)(int s))
+{
+    struct sigaction action, old_action;
+
+    action.sa_handler = handler;
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = 0;
+
+    sigaction(SIGTERM, NULL, &old_action);
+    if (old_action.sa_handler != SIG_IGN) {
+        sigaction(SIGTERM, &action, NULL);
+    }
+}
+
 int main(){
+    reg_sigterm_handler(sigterm_handler);
     fout = fopen("out.dat", "w");
 
     uint16_t serv_port = 9876;
@@ -58,20 +77,31 @@ int main(){
         puts("Connection Abort.");
         return 0;
     }
-    
+    bool file_open = true;
+    ATP_PROC_RESULT result;
     while (true) {
         sockaddr * pcli_addr = (SA *)&cli_addr;
 
         if ((n = recvfrom(sockfd, msg, ATP_MAX_READ_BUFFER_SIZE, 0, pcli_addr, &cli_len)) < 0){
-            if(!(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN)) break; else continue;
+            if(!(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN)) break; 
+            if(atp_timer_event(context, 1000) == ATP_PROC_FINISH){
+                break;
+            }
+        }else{
+            result = atp_process_udp(context, sockfd, msg, n, (const SA *)&cli_addr, cli_len);
         }
-        ATP_PROC_RESULT result = atp_process_udp(context, sockfd, msg, n, (const SA *)&cli_addr, cli_len);
+        if (atp_eof(socket))
+        {
+            if (file_open)
+            {
+                fclose(fout);
+            }
+            file_open = false;
+        }
         if (result == ATP_PROC_FINISH)
         {
             break;
         }
     }
-
-    fclose(fout);
     return 0;
 }

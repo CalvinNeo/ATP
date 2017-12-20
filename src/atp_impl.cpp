@@ -197,6 +197,10 @@ void print_out(ATPSocket * socket, OutgoingPacket * out_pkt, const char * method
     {
         type += "U";
     }
+    if (pkt->get_opt())
+    {
+        type += "O";
+    }
     if (out_pkt->has_user_data())
     {
         type += "D";

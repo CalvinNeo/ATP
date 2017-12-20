@@ -44,6 +44,7 @@ ATP_PROC_RESULT atp_close(atp_socket * socket);
 ATP_PROC_RESULT atp_async_close(atp_socket * socket);
 void atp_set_callback(atp_socket * socket, int callback_type, atp_callback_func * proc);
 ATP_PROC_RESULT atp_eof(atp_socket * socket);
+ATP_PROC_RESULT atp_send_status(atp_socket * socket);
 bool atp_destroyed(atp_socket * socket);
 
 

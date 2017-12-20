@@ -6,7 +6,7 @@ ATP is a naive TCP implementation based on UDP
 
 # Usage
 ## Requirements
-1. C++17 standard(e.g. G++7.2)
+1. C++17 standard(e.g. g++7.2)
 
 ## Build
 Make the project by command
@@ -18,7 +18,16 @@ All APIs are available in [/src/atp.h](/src/atp.h), and is compatible with C89
 
 
 # Demo
+There are several demos:
+
+1. sender/receiver
 The demo includes two separated programs: the sender and the receiver. A File will be sent from the sender to the receiver.
+You can 
+2. send/recv
+This demo is similar to sender/receiver, send gets its input from stdin now.
+3. send_poll
+4. send_aio
+
 
     make demo
 

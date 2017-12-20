@@ -21,6 +21,7 @@
 #include "atp_impl.h"
 #include "udp_util.h"
 #include "atp.h"
+#include <functional>
 
 atp_context * atp_init(){
     get_context().init();
@@ -41,21 +42,26 @@ static void alarm_handler(int interval){
 }
 
 static ATP_PROC_RESULT sys_loop(atp_socket * socket, std::function<int(atp_socket*)> predicate){ 
+    if(socket == nullptr) return ATP_PROC_ERROR;
     // sys loop with blocked socket
     ATP_PROC_RESULT result; 
     origin_sigfunc = setup_signal(SIGALRM, alarm_handler);
     alarm(1);
     socket->sys_cache = new char [ATP_SYSCACHE_MAX];
+    struct timeval tv;
+    tv.tv_sec = 5;
+    ATPContext * context = socket->context;
+    setsockopt(socket->sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     while (true) {
         struct sockaddr_in peer_addr; socklen_t peer_len = sizeof(peer_addr);
         sockaddr * ppeer_addr = (SA *)&peer_addr;
-        struct timeval tv;
-        tv.tv_sec = 5;
-        setsockopt(socket->sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         int n = recvfrom(socket->sockfd, socket->sys_cache, ATP_SYSCACHE_MAX, 0, ppeer_addr, &peer_len);
         if (n < 0){
             if(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN){
                 // normal, timeout
+                if(atp_timer_event(context, 1000) == ATP_PROC_FINISH){
+                    break;
+                }
             }else{
                 break;
             }
@@ -84,6 +90,7 @@ static ATP_PROC_RESULT sys_loop(atp_socket * socket, std::function<int(atp_socke
 }
 
 int atp_getfd(atp_socket * socket){
+    if(socket == nullptr) return ATP_PROC_ERROR;
     return socket->sockfd;
 }
 
@@ -121,7 +128,7 @@ ATP_PROC_RESULT atp_connect(atp_socket * socket, const struct sockaddr * to, soc
 }
 
 ATP_PROC_RESULT atp_listen(atp_socket * socket, uint16_t host_port){
-    assert(socket != nullptr);
+    if(socket == nullptr) return ATP_PROC_ERROR;
     return socket->listen(host_port);
 }
 
@@ -150,12 +157,12 @@ ATP_PROC_RESULT atp_accept(atp_socket * socket){
 }
 
 ATP_PROC_RESULT atp_write(atp_socket * socket, void * buf, size_t length){
-    assert(socket != nullptr);
+    if(socket == nullptr) return ATP_PROC_ERROR;
     return socket->write(buf, length);
 }
 
 ATP_PROC_RESULT atp_process_udp(atp_context * context, int sockfd, const char * buf, size_t len, const struct sockaddr * to, socklen_t tolen){
-    assert(context != nullptr);
+    if(socket == nullptr) return ATP_PROC_ERROR;
     ATPAddrHandle handle_to(to);
     ATP_PROC_RESULT result = ATP_PROC_OK;
     if (handle_to.host_port() == 0 && handle_to.host_addr() == 0)
@@ -191,7 +198,7 @@ ATP_PROC_RESULT atp_process_udp(atp_context * context, int sockfd, const char * 
 }
 
 ATP_PROC_RESULT atp_close(atp_socket * socket){
-    assert(socket != nullptr);
+    if(socket == nullptr) return ATP_PROC_ERROR;
     #if defined (ATP_LOG_AT_DEBUG)
         log_debug(socket, "User called atp_close");
     #endif
@@ -208,7 +215,7 @@ ATP_PROC_RESULT atp_close(atp_socket * socket){
 
 
 ATP_PROC_RESULT atp_async_close(atp_socket * socket){
-    assert(socket != nullptr);
+    if(socket == nullptr) return ATP_PROC_ERROR;
     #if defined (ATP_LOG_AT_DEBUG)
         log_debug(socket, "User called atp_async_close");
     #endif
@@ -216,18 +223,30 @@ ATP_PROC_RESULT atp_async_close(atp_socket * socket){
 }
 
 void atp_set_callback(atp_socket * socket, int callback_type, atp_callback_func * proc){
+    if(socket == nullptr) return ATP_PROC_ERROR;
     socket->callbacks[callback_type] = proc;
 }
 
 ATP_PROC_RESULT atp_eof(atp_socket * socket){
-    return socket->readable();
+    if(socket == nullptr) return ATP_PROC_ERROR;
+    if(socket->conn_state < CS_CONNECTED) return false;
+    return !socket->readable();
 }
 
+ATP_PROC_RESULT atp_send_status(atp_socket * socket){
+    if(socket->outbuf.size() == 0){
+        return ATP_PROC_OK;
+    }else{
+        return ATP_PROC_WAIT;
+    }
+}
 ATP_PROC_RESULT atp_timer_event(atp_context * context, uint64_t interval){
+    if(context == nullptr) return ATP_PROC_ERROR;
     ATP_PROC_RESULT result = context->daily_routine();
     return result;
 }
 
 bool atp_destroyed(atp_socket * socket){
+    if(socket == nullptr) return ATP_PROC_ERROR;
     return socket == nullptr ? true : socket->conn_state == CS_DESTROY;
 }

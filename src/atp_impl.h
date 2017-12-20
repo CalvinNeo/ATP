@@ -39,6 +39,7 @@
 #define ATP_LOG_AT_NOTE
 // #define ATP_LOG_AT_DEBUG
 // #define ATP_LOG_UDP
+// #define ATP_DEBUG_TEST_OVERFLOW
 
 #define _log_doit _log_doit1
 void _log_doit1(ATPSocket * socket, char const* func_name, int level, char const * fmt, va_list va);
@@ -97,7 +98,8 @@ void log_note2(std::function<void(ATPContext *, char const *, va_list)> f, ATPCo
 #define PACKETFLAG_PSH 0x8
 #define PACKETFLAG_ACK 0x10
 #define PACKETFLAG_URG 0x20
-#define PACKETFLAG_MASK 0x3f
+#define PACKETFLAG_OPT 0x40
+#define PACKETFLAG_MASK 0x7f
 
 struct PACKED_ATTRIBUTE ATPPacket : public CATPPacket{
     // apt packet layout, trivial
@@ -113,6 +115,7 @@ struct PACKED_ATTRIBUTE ATPPacket : public CATPPacket{
     MAKE_FLAGS_GETTER_SETTER(psh, PACKETFLAG_PSH);
     MAKE_FLAGS_GETTER_SETTER(ack, PACKETFLAG_ACK);
     MAKE_FLAGS_GETTER_SETTER(urg, PACKETFLAG_URG);
+    MAKE_FLAGS_GETTER_SETTER(opt, PACKETFLAG_OPT);
 
     template <typename ... Args>
     static uint16_t create_flags(Args&& ... args){
@@ -247,6 +250,7 @@ struct OutgoingPacket{
     uint64_t timestamp; // microseconds
     uint32_t transmissions = 0; // total number of transmissions
     bool need_resend;
+    uint32_t full_seq_nr;
     char * data; // = head + data
 
     void destroy(){
@@ -255,7 +259,21 @@ struct OutgoingPacket{
         data = nullptr;
     }
     bool is_empty_ack() const{
-        return (get_head()->get_ack() && payload == 0 && !(get_head()->get_syn() || get_head()->get_fin()));
+        return !is_promised_packet();
+    }
+    bool is_promised_packet() const{
+        // a promist packet will be resend if not got ACK from peer
+        // only promised packet has seq_nr
+        if(get_head()->get_syn() || get_head()->get_fin()){
+            return true;
+        }
+        if (payload == 0)
+        {
+            // an payload == 0 packet must ACK
+            assert(get_head()->get_ack());
+            return false;
+        }
+        return true;
     }
     bool has_user_data() const{
         if (payload == 0)
@@ -301,6 +319,12 @@ struct ATPSocket{
 
     CONN_STATE_ENUM conn_state;
 
+    struct _cmp_outgoingpacket_fullseq{  
+        bool operator()(OutgoingPacket * left, OutgoingPacket * right){  
+            if(left->full_seq_nr == right->full_seq_nr)  return left > right;  
+            return left->full_seq_nr > right->full_seq_nr;  
+        }  
+    }; 
     struct _cmp_outgoingpacket{  
         bool operator()(OutgoingPacket * left, OutgoingPacket * right){  
             if(left->get_head()->seq_nr == right->get_head()->seq_nr)  return left > right;  
@@ -317,6 +341,7 @@ struct ATPSocket{
     // std::priority_queue<OutgoingPacket*, std::vector<OutgoingPacket*>, _cmp_outgoingpacket> inbuf;
     std::vector<OutgoingPacket*> outbuf;
     std::vector<OutgoingPacket*> inbuf;
+    std::vector<OutgoingPacket*> inbuf_cache2;
 
 
     // my seq number
@@ -340,7 +365,7 @@ struct ATPSocket{
     uint64_t delay_ack_timeout = 0; // at this exact time send delayed ACK
 
     uint16_t atp_retries1 = 3; // TCP RFC recommends 3
-    uint16_t atp_retries2 = 10; // TCP RFC recommends 15
+    uint16_t atp_retries2 = 8; // TCP RFC recommends 15
     uint16_t atp_syn_retries1 = 5;
 
     // Not used yet
@@ -389,7 +414,7 @@ struct ATPSocket{
         }
         inbuf.clear();
     }
-    // called by atp_create_socket
+    // called by atp_create_socket, returns sockfd
     int init(int family, int type, int protocol);
     // active connect
     ATP_PROC_RESULT connect(const ATPAddrHandle & to_addr);
@@ -409,6 +434,7 @@ struct ATPSocket{
     ATP_PROC_RESULT close();
     bool writable() const;
     bool readable() const;
+    void add_selective_ack_option(OutgoingPacket * out_pkt);
     void add_data(OutgoingPacket * out_pkt, const void * buf, const size_t len);
     size_t bytes_can_send_once() const ;
     size_t bytes_can_send_one_packet() const ;
@@ -420,14 +446,19 @@ struct ATPSocket{
     // handles FIN
     ATP_PROC_RESULT check_fin(OutgoingPacket * recv_pkt);
     // handles ACK, when a ack packet comes, update ack_nr
-    ATP_PROC_RESULT update_myack(OutgoingPacket * recv_pkt); 
+    ATP_PROC_RESULT update_myack(OutgoingPacket * recv_pkt);
+    ATP_PROC_RESULT handle_recv_packet(OutgoingPacket * recv_pkt, bool from_cache);
     ATP_PROC_RESULT process(const ATPAddrHandle & addr, const char * buffer, size_t len);
     ATP_PROC_RESULT invoke_callback(int callback_type, atp_callback_arguments * args);
     // update my_seq_acked_by_peer
     ATP_PROC_RESULT do_ack_packet(OutgoingPacket * recv_pkt);
+    // according to current base
     uint32_t get_full_seq_nr(uint32_t raw_peer_seq_nr){
         return raw_peer_seq_nr + peer_seq_nr_base;
     }
+    // guess which base
+    uint32_t guess_full_seq_nr(uint32_t raw_peer_seq);
+    uint32_t guess_full_ack_nr(uint32_t raw_peer_ack);
     void update_rto(OutgoingPacket * recv_pkt);
     void destroy();
     ATP_PROC_RESULT check_timeout();
@@ -534,11 +565,10 @@ struct ATPContext{
         } 
         // clear destroyed sockets
         for(ATPSocket * socket : destroyed_sockets){
-            destroy(socket);
+            this->destroy(socket);
         }
         destroyed_sockets.clear();
-
-        if (this->sockets.size() == 0)
+        if (this->sockets.size() == 0 && this->destroyed_sockets.size() == 0)
         {
             #if defined (ATP_LOG_AT_DEBUG)
                 log_debug(this, "Destroying context.");

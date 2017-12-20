@@ -143,12 +143,14 @@ struct PACKED_ATTRIBUTE CATPPacket{
 #define IPV6_HEADER_SIZE 40
 #define UDP_HEADER_SIZE 8
 #define TCP_DEFAULT_MSS 536
-static const size_t MAX_UDP_PAYLOAD = 65535 - IPV4_HEADER_SIZE - UDP_HEADER_SIZE;
-// The size of ATP's write buffer
-static const size_t ATP_MAX_WRITE_BUFFER_SIZE = ATP_IP_MTU;
-static const size_t ATP_MAX_READ_BUFFER_SIZE = ATP_IP_MTU;
+static const size_t MAX_UDP_PAYLOAD = ATP_IP_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE;
+static const size_t MAX_ADP_PAYLOAD = ATP_IP_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE - sizeof(CATPPacket);
+// Max size of an ATPPacket(including head)
+static const size_t ATP_MAX_WRITE_BUFFER_SIZE = MAX_UDP_PAYLOAD;
+static const size_t ATP_MAX_READ_BUFFER_SIZE = MAX_UDP_PAYLOAD;
+// recommended size of buffer, when calling write once, +1 is for the last '\0'
+static const size_t ATP_MIN_BUFFER_SIZE = ETHERNET_MTU - IPV4_HEADER_SIZE - sizeof(CATPPacket) - UDP_HEADER_SIZE + 1;
 // The "MSS" to avoid IP fragmentation, range from [ATP_MSS_CEILING, ATP_MSS_FLOOR]
-static const size_t ATP_MIN_BUFFER_SIZE = ETHERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE + 1;
 static const size_t ATP_MSS_CEILING = ETHERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE - sizeof(CATPPacket);
 static const size_t ATP_MSS_FLOOR = INTERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE - sizeof(CATPPacket);
 

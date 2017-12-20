@@ -59,7 +59,7 @@ atp_callback_arguments ATPSocket::make_atp_callback_arguments(int method, Outgoi
 
 OutgoingPacket * ATPSocket::basic_send_packet(uint16_t flags){
     ATPPacket pkt = ATPPacket{
-        (seq_nr & seq_nr_mask), // seq_nr, updatede in send_packet
+        (seq_nr & seq_nr_mask), // seq_nr, updated in send_packet
         (ack_nr & seq_nr_mask), // ack_nr
         peer_sock_id, // peer_sock_id
         flags, // flags
@@ -73,6 +73,7 @@ OutgoingPacket * ATPSocket::basic_send_packet(uint16_t flags){
         0, // timestamp, set at `send_packet`
         0, // transmissions, update by `send_packet`
         false, // need_resend, update by `send_packet`
+        seq_nr, // full_seq_nr, updated in send_packet
         reinterpret_cast<char *>(std::calloc(1, sizeof (ATPPacket))) // SYN packet will not contain data
     };
     std::memcpy(out_pkt->data, &pkt, sizeof (ATPPacket));
@@ -109,7 +110,11 @@ ATP_PROC_RESULT ATPSocket::connect(const ATPAddrHandle & to_addr){
     register_to_look_up();
 
     while(seq_nr == 0){
-        seq_nr = rand() & seq_nr_mask;
+        #if defined (ATP_DEBUG_TEST_OVERFLOW)
+            seq_nr = 0xfffd;
+        #else
+            seq_nr = rand() & seq_nr_mask;
+        #endif
     }
     ack_nr = 0;
 
@@ -195,7 +200,11 @@ ATP_PROC_RESULT ATPSocket::accept(const ATPAddrHandle & to_addr, OutgoingPacket 
         register_to_look_up();
         peer_sock_id = *reinterpret_cast<uint16_t*>(recv_pkt->data + sizeof(ATPPacket));
         while(seq_nr == 0){
-            seq_nr = rand() & seq_nr_mask;
+            #if defined (ATP_DEBUG_TEST_OVERFLOW)
+                seq_nr = 0xfffd;
+            #else
+                seq_nr = rand() & seq_nr_mask;
+            #endif
         }
 
         // must FORCE set ack_nr, because now ack_nr is still 0
@@ -242,7 +251,7 @@ ATP_PROC_RESULT ATPSocket::receive(OutgoingPacket * recv_pkt){
     }else if(recv_pkt->get_head()->get_syn()){
         // the 2 bytes payload in syn packet are not user data, they carried sock_id
         return ATP_PROC_OK;
-    }else if(recv_pkt->payload == 0){
+    }else if(!recv_pkt->has_user_data()){
         // there is no payload
         // just ignore
         return ATP_PROC_OK;
@@ -285,7 +294,7 @@ ATP_PROC_RESULT ATPSocket::send_packet_noguard(OutgoingPacket * out_pkt){
 void ATPSocket::check_unsend_packet(){
     // If delayed ack is enabled, an empty ACK packet is allowed to be sent later,
     // and possibly attached with real data files
-    if(outbuf.size() <= 0) {return;}
+    if(outbuf.size() <= 0) {return;} // if there's no cached packets
     int marked_total = 0;
     for(OutgoingPacket * out_pkt : outbuf){
         // check everytime in the for-loop
@@ -294,10 +303,9 @@ void ATPSocket::check_unsend_packet(){
         {
             if (out_pkt->is_empty_ack())
             {
-                // mark all empty ACK without data, they will be deleted
-                // after they are sent. We don't resend any empty ACK packets.
-                if(out_pkt->get_head()->ack_nr < ack_nr){
-                    // We don't send a old empty ACK packet
+                // mark all empty ACK without data, they will be deleted, after they are sent. We don't resend any empty ACK packets.
+                if(guess_full_seq_nr(out_pkt->get_head()->ack_nr) < ack_nr && !overflow_lock){
+                    // We don't send a old empty ACK packet, can only be triggerred by Delayed ACK
                 }else{
                     send_packet_noguard(out_pkt);
                 }
@@ -322,7 +330,7 @@ void ATPSocket::check_unsend_packet(){
             break;
         }
     }
-    std::make_heap(outbuf.begin(), outbuf.end(), _cmp_outgoingpacket());
+    std::make_heap(outbuf.begin(), outbuf.end(), _cmp_outgoingpacket_fullseq());
     delay_ack_timeout = 0;
 }
 
@@ -330,8 +338,9 @@ ATP_PROC_RESULT ATPSocket::send_packet(OutgoingPacket * out_pkt){
     ATP_PROC_RESULT result = ATP_PROC_OK;
     // setup packets
     // when the package is constructed, update `seq_nr` for the next package
-    if (out_pkt->payload > 0 && !out_pkt->need_resend)
+    if (out_pkt->is_promised_packet() > 0 && !out_pkt->need_resend)
     {
+        out_pkt->full_seq_nr ++;
         out_pkt->get_head()->seq_nr ++;
         (out_pkt->get_head()->seq_nr) &= seq_nr_mask;
         seq_nr ++;
@@ -339,8 +348,8 @@ ATP_PROC_RESULT ATPSocket::send_packet(OutgoingPacket * out_pkt){
     if (bytes_can_send_one_packet() >= out_pkt->payload)
     {
         // actually send
-        // if payload == 0, not SYN, not FIN, can always send regradless of window
-        if (out_pkt->is_empty_ack())
+        // if payload == 0 and is not FIN, can always send regradless of window
+        if (out_pkt->is_empty_ack() || out_pkt->get_head()->get_syn())
         {
             if(ack_delayed_time != 0 && conn_state != CS_TIME_WAIT){
                 // Delay ACK is enabled
@@ -349,7 +358,7 @@ ATP_PROC_RESULT ATPSocket::send_packet(OutgoingPacket * out_pkt){
                         , out_pkt->get_head()->seq_nr, out_pkt->length, out_pkt->payload);
                 #endif
                 outbuf.push_back(out_pkt);
-                std::push_heap(outbuf.begin(), outbuf.end(), _cmp_outgoingpacket());
+                std::push_heap(outbuf.begin(), outbuf.end(), _cmp_outgoingpacket_fullseq());
                 uint64_t current_ms = get_current_ms();
                 if (delay_ack_timeout == 0)
                 {
@@ -368,7 +377,7 @@ ATP_PROC_RESULT ATPSocket::send_packet(OutgoingPacket * out_pkt){
             // We don't send immediately packets with userdata
             // enqueue for proper time to send and for potential resend
             outbuf.push_back(out_pkt);
-            std::push_heap(outbuf.begin(), outbuf.end(), _cmp_outgoingpacket());
+            std::push_heap(outbuf.begin(), outbuf.end(), _cmp_outgoingpacket_fullseq());
             check_unsend_packet();
         }
     }else{
@@ -378,7 +387,7 @@ ATP_PROC_RESULT ATPSocket::send_packet(OutgoingPacket * out_pkt){
         #endif
         result = ATP_PROC_OK;
         outbuf.push_back(out_pkt);
-        std::push_heap(outbuf.begin(), outbuf.end(), _cmp_outgoingpacket());
+        std::push_heap(outbuf.begin(), outbuf.end(), _cmp_outgoingpacket_fullseq());
     }
     
     return result;
@@ -456,6 +465,11 @@ ATP_PROC_RESULT ATPSocket::close(){
             break;
     }
     return result;
+}
+
+
+void ATPSocket::add_selective_ack_option(OutgoingPacket * out_pkt){
+
 }
 
 void ATPSocket::add_data(OutgoingPacket * out_pkt, const void * buf, const size_t len){
@@ -687,33 +701,7 @@ ATP_PROC_RESULT ATPSocket::check_fin(OutgoingPacket * recv_pkt){
     return result;
 }
 
-ATP_PROC_RESULT ATPSocket::update_myack(OutgoingPacket * recv_pkt){
-    if(conn_state < CS_CONNECTED){
-        // handles the last hand-shake of connection establishment
-        #if defined (ATP_LOG_AT_DEBUG)
-            log_debug(this, "Connection established on B's side, handshake completed.");
-        #endif
-        conn_state = CS_CONNECTED;
-    }
-    ATP_PROC_RESULT action = ATP_PROC_OK;
-
-    uint32_t raw_peer_seq = recv_pkt->get_head()->seq_nr;
-
-    // When we met a 0, we know that peer's seq_nr wraps.
-    // e.g. If our `peer_seq_nr_base` is now 0, and we get a 0 seq_nr
-    // I understand the number overflowed. So I update `peer_seq_nr_base` to 256;
-    if (raw_peer_seq == 0 && !overflow_lock)
-    {
-        // peer's seq_nr wraps here
-        peer_seq_nr_base += (seq_nr_mask + 1);
-        #if defined (ATP_LOG_AT_DEBUG)
-            log_debug(this, "Seq_nr overflow to 0, current base %u(%x).", peer_seq_nr_base, peer_seq_nr_base);
-        #endif
-        // because there may be several packets which have seq_nr == 0(one with paylod, others don't)
-        // only overflow once
-        overflow_lock = true;
-    } 
-    // and then we update peer_seq
+uint32_t ATPSocket::guess_full_seq_nr(uint32_t raw_peer_seq){
     uint32_t peer_seq = get_full_seq_nr(raw_peer_seq);
     // But if then we get a packet who somehow comes later, with an un-overflowed seq_nr?
     // e.g. If seq_nr_mask is 0xff = 255, and now our ack_nr is 1025.
@@ -754,10 +742,42 @@ ATP_PROC_RESULT ATPSocket::update_myack(OutgoingPacket * recv_pkt){
             // not overflow, choose bigger
         }
     }
+    return peer_seq;
+}
+
+ATP_PROC_RESULT ATPSocket::update_myack(OutgoingPacket * recv_pkt){
+    if(conn_state < CS_CONNECTED){
+        // handles the last hand-shake of connection establishment
+        #if defined (ATP_LOG_AT_DEBUG)
+            log_debug(this, "Connection established on B's side, handshake completed.");
+        #endif
+        conn_state = CS_CONNECTED;
+    }
+    ATP_PROC_RESULT action = ATP_PROC_OK;
+
+    uint32_t raw_peer_seq = recv_pkt->get_head()->seq_nr;
+
+    // When we met a 0, we know that peer's seq_nr wraps.
+    // e.g. If our `peer_seq_nr_base` is now 0, and we get a 0 seq_nr
+    // I understand the number overflowed. So I update `peer_seq_nr_base` to 256;
+    if (raw_peer_seq < 5 && !overflow_lock)
+    {
+        // peer's seq_nr wraps here
+        peer_seq_nr_base += (seq_nr_mask + 1);
+        #if defined (ATP_LOG_AT_DEBUG)
+            log_debug(this, "Seq_nr overflow to 0, current base %u(%x).", peer_seq_nr_base, peer_seq_nr_base);
+        #endif
+        // because there may be several packets which have seq_nr == 0(one with paylod, others don't)
+        // only overflow once
+        overflow_lock = true;
+    } 
+    // and then we update peer_seq
+    uint32_t peer_seq = guess_full_seq_nr(raw_peer_seq);
+
     // get peer's window
     cur_window = recv_pkt->get_head()->window_size;
 
-    if (recv_pkt->payload == 0)
+    if (recv_pkt->is_empty_ack())
     {
         // peer don't send data, this packet only tell us ack number, for our `do_ack_packet` function
         // it's seq_nr maybe repeated
@@ -890,6 +910,135 @@ ATP_PROC_RESULT ATPSocket::update_myack(OutgoingPacket * recv_pkt){
     return action;
 }
 
+ATP_PROC_RESULT ATPSocket::handle_recv_packet(OutgoingPacket * recv_pkt, bool from_cache){
+    uint32_t raw_peer_seq = recv_pkt->get_head()->seq_nr;
+    ATP_PROC_RESULT action = update_myack(recv_pkt);
+    do_ack_packet(recv_pkt);
+    uint32_t peer_seq = guess_full_seq_nr(raw_peer_seq);
+    if (action == ATP_PROC_DROP)
+    {
+        #if defined (ATP_LOG_AT_DEBUG)
+            if (from_cache)
+            {   
+                log_debug(this, "Drop packet from cache, my ack:%u peer_seq:%u", ack_nr, peer_seq);
+            }else{
+                log_debug(this, "Drop packet, my ack:%u peer_seq:%u", ack_nr, peer_seq);
+            }
+        #endif
+        #if defined (ATP_LOG_AT_NOTE)
+            print_out(this, recv_pkt, "drop");
+            // printf("Current ack_nr %u guess_full_seq_nr %u raw_peer_seq %u base %u\n",
+            //     ack_nr, guess_full_seq_nr(raw_peer_seq), raw_peer_seq, peer_seq_nr_base);
+        #endif
+        delete recv_pkt;
+        recv_pkt = nullptr;
+        // maybe peer has not receive my ACK, so it keep re-sending ACK
+        OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
+        send_packet(out_pkt);
+        if (from_cache)
+        {
+            std::pop_heap(inbuf.begin(), inbuf.end(), _cmp_outgoingpacket());
+            inbuf.pop_back();
+        }
+    }
+    else if (action == ATP_PROC_OK)
+    {
+        if (!recv_pkt->is_empty_ack() && recv_pkt->get_head()->seq_nr == seq_nr_mask)
+        {
+            // The last packet before overflows has been acked. 
+            // It doesn't means there will be no re-sent packet with seq_nr before overflow
+            assert(inbuf.size() == 0 || (from_cache && inbuf.size() == 1));
+            std::copy(inbuf_cache2.begin(), inbuf_cache2.end(), std::back_inserter(inbuf));
+            std::make_heap(inbuf.begin(), inbuf.end());
+            inbuf_cache2.clear();
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Handled all packets before overflow, inbuf size: %u.", inbuf.size());
+            #endif
+        }
+        if (!recv_pkt->is_empty_ack() && recv_pkt->get_head()->seq_nr == 0)
+        {
+            overflow_lock = false;
+        }
+        if(!recv_pkt->get_head()->get_fin()){
+            // Data in FIN pakcet is not user's data
+            this->receive(recv_pkt);
+        }
+        #if defined (ATP_LOG_AT_DEBUG)
+            if(from_cache){
+                log_debug(this, "Process a cached ATPPacket, peer_seq:%u, my ack:%u", peer_seq, ack_nr);
+            }
+        #endif
+        #if defined (ATP_LOG_AT_NOTE)
+            print_out(this, recv_pkt, "rcv");
+        #endif
+        if (from_cache)
+        {
+            std::pop_heap(inbuf.begin(), inbuf.end(), _cmp_outgoingpacket());
+            inbuf.pop_back();
+        }
+        // Do not delete, renew `last_handled_pkt` in `ATPSocket::process`
+    }
+    else if (action == ATP_PROC_CACHE)
+    {
+        #if defined (ATP_LOG_AT_DEBUG)
+            log_debug(this, "Cached packet, ack:%u raw_peer_seq:%u inbuf_size: %u", ack_nr, raw_peer_seq, inbuf.size());
+        #endif
+        if (!from_cache)
+        {
+            if (((peer_seq & seq_nr_mask) / (seq_nr_mask + 1)) >= peer_seq_nr_base)
+            {
+                // cache into inbuf_cache2
+                auto repeated = std::find_if(inbuf_cache2.begin(), inbuf_cache2.end(), 
+                    [=](OutgoingPacket * op){
+                        return op->get_head()->seq_nr == recv_pkt->get_head()->seq_nr;
+                    }
+                );
+                if (repeated == inbuf_cache2.end())
+                {
+                    inbuf_cache2.push_back(recv_pkt);
+                    #if defined (ATP_LOG_AT_NOTE)
+                        print_out(this, recv_pkt, "cache-new2");
+                    #endif
+                }else{
+                    #if defined (ATP_LOG_AT_NOTE)
+                        print_out(this, recv_pkt, "cache-rep2");
+                    #endif
+                    delete recv_pkt;
+                    recv_pkt = nullptr;
+                }
+            }else{
+                // cache into inbuf
+                auto repeated = std::find_if(inbuf.begin(), inbuf.end(), 
+                    [=](OutgoingPacket * op){
+                        return op->get_head()->seq_nr == recv_pkt->get_head()->seq_nr;
+                    }
+                );
+                if (repeated == inbuf.end())
+                {
+                    // not repeated
+                    inbuf.push_back(recv_pkt);
+                    std::push_heap(inbuf.begin(), inbuf.end(), _cmp_outgoingpacket());
+                    #if defined (ATP_LOG_AT_NOTE)
+                        print_out(this, recv_pkt, "cache-new");
+                    #endif
+                }else{
+                    #if defined (ATP_LOG_AT_NOTE)
+                        print_out(this, recv_pkt, "cache-rep");
+                    #endif
+                    delete recv_pkt;
+                    recv_pkt = nullptr;
+                }
+            }
+
+        }
+    }
+    else if (action == ATP_PROC_FINISH)
+    {
+        // handled near the end of this function
+    }
+    return action;
+}
+
 ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buffer, size_t len){
     OutgoingPacket * recv_pkt = new OutgoingPacket();
     // set OutgoingPacket
@@ -902,6 +1051,7 @@ ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buff
     recv_pkt->payload = recv_pkt->length - sizeof(ATPPacket);
 
     ATP_PROC_RESULT result = ATP_PROC_OK;
+    uint32_t old_ack_nr = ack_nr;
 
     uint32_t raw_peer_seq = recv_pkt->get_head()->seq_nr;
     #if defined (ATP_LOG_AT_DEBUG)
@@ -965,136 +1115,45 @@ ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buff
         return result;
     } 
 
-    uint32_t old_ack_nr = ack_nr;
-    int action = update_myack(recv_pkt);
-    do_ack_packet(recv_pkt);
     OutgoingPacket * last_handled_pkt = nullptr;
-    switch(action){
-        case ATP_PROC_DROP:
-        {
-            #if defined (ATP_LOG_AT_DEBUG)
-                log_debug(this, "Drop packet, raw_peer_seq:%u, my ack:%u", raw_peer_seq, ack_nr);
-            #endif
-            #if defined (ATP_LOG_AT_NOTE)
-                print_out(this, recv_pkt, "drop");
-            #endif
-            delete recv_pkt;
-            recv_pkt = nullptr;
-            // maybe peer has not receive my ACK, so it keep re-sending
-            OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
-            send_packet(out_pkt);
-            result = ATP_PROC_OK;
-            break;
-        }
-        case ATP_PROC_OK:
-        {
-            if (!recv_pkt->is_empty_ack() && recv_pkt->get_head()->seq_nr == seq_nr_mask)
-            {
-                // The last packet before overflows has been acked. 
-                // It doesn't means there will be no re-sent packet with seq_nr before overflow
-                overflow_lock = false;
-            }
-            if(!recv_pkt->get_head()->get_fin()){
-                // Data in FIN pakcet is not user's data
-                result = this->receive(recv_pkt);
-            }
-            #if defined (ATP_LOG_AT_NOTE)
-                print_out(this, recv_pkt, "rcv");
-            #endif
-            // delete the previous last_handled_pkt
-            delete last_handled_pkt;
-            last_handled_pkt = recv_pkt;
-            break;
-        }
-        case ATP_PROC_CACHE:
-            #if defined (ATP_LOG_AT_DEBUG)
-                log_debug(this, "Cached packet, ack:%u raw_peer_seq:%u inbuf_size: %u", ack_nr, raw_peer_seq, inbuf.size());
-            #endif
-            if (std::find_if(inbuf.begin(), inbuf.end(), 
-                [=](OutgoingPacket * op){
-                    return op->get_head()->seq_nr == recv_pkt->get_head()->seq_nr;
-                }) == inbuf.end())
-            {
-                inbuf.push_back(recv_pkt);
-                std::push_heap(inbuf.begin(), inbuf.end(), _cmp_outgoingpacket());
-                #if defined (ATP_LOG_AT_NOTE)
-                    print_out(this, recv_pkt, "cache1");
-                #endif
-            }else{
-                #if defined (ATP_LOG_AT_NOTE)
-                    print_out(this, recv_pkt, "cache-rep");
-                #endif
-                delete recv_pkt;
-                recv_pkt = nullptr;
-            }
-            result = ATP_PROC_OK;
-            break;
-        case ATP_PROC_FINISH:
-            // handled near the end of this function
-            break;
+    result = handle_recv_packet(recv_pkt, false);
+    if (result == ATP_PROC_OK)
+    {
+        // delete the previous last_handled_pkt
+        delete last_handled_pkt;
+        last_handled_pkt = recv_pkt;
     }
+
     #if defined (ATP_LOG_AT_DEBUG)
         log_debug(this, "After handled this packet, there are %u left in inbuf.", inbuf.size());
     #endif
-    if (action == ATP_PROC_OK)
+    if (result == ATP_PROC_OK)
     {
         // check if there is any packet which can be acked
         while(!inbuf.empty()){
             OutgoingPacket * top_packet = inbuf[0];
-            action = update_myack(top_packet);
-            do_ack_packet(top_packet);
-            uint32_t peer_seq = get_full_seq_nr(top_packet->get_head()->seq_nr);
-            if(action == ATP_PROC_DROP)
+            result = handle_recv_packet(top_packet, true);
+            if(result == ATP_PROC_DROP)
             {
-                #if defined (ATP_LOG_AT_DEBUG)
-                    log_debug(this, "Drop packet from cache, ack:%u peer_seq:%u", ack_nr, peer_seq);
-                #endif
-                #if defined (ATP_LOG_AT_NOTE)
-                    print_out(this, top_packet, "drop");
-                #endif
-                OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
-                send_packet(out_pkt);
-                delete top_packet;
-                top_packet = nullptr;
-                std::pop_heap(inbuf.begin(), inbuf.end(), _cmp_outgoingpacket());
-                inbuf.pop_back();
                 result = ATP_PROC_OK;
                 continue;
             }
-            else if(action == ATP_PROC_OK)
+            else if(result == ATP_PROC_OK)
             {
-                if (!top_packet->is_empty_ack() && top_packet->get_head()->seq_nr == seq_nr_mask)
-                {
-                    // The last packet before overflows has been acked. 
-                    // It doesn't means there will be no re-sent packet with seq_nr before overflow
-                    overflow_lock = false;
-                }
-                #if defined (ATP_LOG_AT_DEBUG)
-                    log_debug(this, "Process a cached ATPPacket, peer_seq:%u, my ack:%u", peer_seq, ack_nr);
-                #endif
-                #if defined (ATP_LOG_AT_NOTE)
-                    print_out(this, top_packet, "rcv");
-                #endif
-                if(!top_packet->get_head()->get_fin()){
-                    // Data in FIN pakcet is not user's data
-                    result = this->receive(top_packet);
-                }
-                std::pop_heap(inbuf.begin(), inbuf.end(), _cmp_outgoingpacket());
-                inbuf.pop_back();
                 // delete the previous last_handled_pkt
                 delete last_handled_pkt;
                 last_handled_pkt = top_packet;
                 result = ATP_PROC_OK;
                 continue;
             }
-            else if(action == ATP_PROC_CACHE)
+            else if(result == ATP_PROC_CACHE)
             {
                 // remain this state;
                 result = ATP_PROC_OK;
                 // TODO trying to figure out why using goto will not jump out of the loop sometimes
                 break;
             }
-            else if(action == ATP_PROC_FINISH)
+            else if(result == ATP_PROC_FINISH)
             {
                 // handled near the end of this function
                 break;
@@ -1114,14 +1173,13 @@ ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buff
         OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
         send_packet(out_pkt);
     }
-    if (action == ATP_PROC_FINISH)
+    if (result == ATP_PROC_FINISH)
     {
         if (conn_state == CS_DESTROY)
         {
             // destroy immediately
             this->destroy();
         }
-        result = action;
     } 
     delete last_handled_pkt;
     return result;
@@ -1138,40 +1196,55 @@ ATP_PROC_RESULT ATPSocket::invoke_callback(int callback_type, atp_callback_argum
     return ATP_PROC_OK;
 }
 
+uint32_t ATPSocket::guess_full_ack_nr(uint32_t raw_peer_ack){
+    uint32_t lowbit_mask = ~(seq_nr_mask);
+    uint32_t my_seq_acked_by_peer_base = lowbit_mask & my_seq_acked_by_peer;
+    uint32_t my_seq_acked_by_peer_masked = my_seq_acked_by_peer & seq_nr_mask;
+    uint32_t calculated_peer_ack = 0;
+    if (my_seq_acked_by_peer_base + raw_peer_ack >= my_seq_acked_by_peer)
+    {
+        if (my_seq_acked_by_peer_base + raw_peer_ack > seq_nr)
+        {
+            // Assume that we won't send seq_nr_mask at once
+            // So this is a packet from before overflow
+            // e.g. raw_peer_ack = 65534 and my_seq_acked_by_peer = 65537, 
+            // though 65535 + 65534 > 65537, the actual packet ack_nr is 65535
+            calculated_peer_ack = my_seq_acked_by_peer_base + raw_peer_ack - (seq_nr_mask + 1);
+        }else{
+            // No overflow happened
+            // should use `my_seq_acked_by_peer_base + raw_peer_ack` directly.
+            calculated_peer_ack = my_seq_acked_by_peer_base + raw_peer_ack;
+        }
+    }else{
+        // Overflowed, because peer will not ack a early acked packet.
+        // e.g. Current my_seq_acked_by_peer is 65534, raw_peer_ack = 1, it must actually be 65536
+        calculated_peer_ack = my_seq_acked_by_peer_base + raw_peer_ack + (seq_nr_mask + 1);
+    }
+    #if defined (ATP_LOG_AT_DEBUG)
+        log_debug(this, "Compute actual ACK, raw_peer_ack:%u, lowbit_mask:%x, my_seq_acked_by_peer_base:%u, calculated_peer_ack:%u, my_seq_acked_by_peer: %u."
+            , raw_peer_ack, lowbit_mask, my_seq_acked_by_peer_base, calculated_peer_ack, my_seq_acked_by_peer );
+    #endif
+    return calculated_peer_ack;
+}
+
 ATP_PROC_RESULT ATPSocket::do_ack_packet(OutgoingPacket * recv_pkt){
     // ack n means ack [0..n]
     uint32_t raw_peer_ack = recv_pkt->get_head()->ack_nr;
-    uint32_t lowbit_mask = ~(seq_nr_mask);
-    uint32_t my_seq_acked_by_peer_start = lowbit_mask & my_seq_acked_by_peer;
-    uint32_t calculated_peer_ack = 0;
-    uint32_t ack_delta = 0;
-
-    if (my_seq_acked_by_peer_start + raw_peer_ack >= my_seq_acked_by_peer)
-    {
-        // it's stupid to ack a previous ack
-        ack_delta = 0;
-    }else{
-        ack_delta = (seq_nr_mask + 1);
-    }
-    calculated_peer_ack = my_seq_acked_by_peer_start + ack_delta + raw_peer_ack;
-        // log_debug(this, "Compute actual ACK, ack_delta:%u, raw_peer_ack:%u, lowbit_mask:%u, my_seq_acked_by_peer_start:%u, calculated_peer_ack:%u, my_seq_acked_by_peer: %u."
-        //     , ack_delta , raw_peer_ack, lowbit_mask, my_seq_acked_by_peer_start, calculated_peer_ack, my_seq_acked_by_peer );
-    #if defined (ATP_LOG_AT_DEBUG)
-        log_debug(this, "Compute actual ACK, ack_delta:%u, raw_peer_ack:%u, lowbit_mask:%u, my_seq_acked_by_peer_start:%u, calculated_peer_ack:%u, my_seq_acked_by_peer: %u."
-            , ack_delta , raw_peer_ack, lowbit_mask, my_seq_acked_by_peer_start, calculated_peer_ack, my_seq_acked_by_peer );
-    #endif
+    uint32_t calculated_peer_ack = guess_full_ack_nr(raw_peer_ack);
+    // update my_seq_acked_by_peer
     my_seq_acked_by_peer = std::max(calculated_peer_ack, my_seq_acked_by_peer);
+    // delete successfully sent packets
     while(!outbuf.empty()){
         OutgoingPacket * out_pkt = outbuf[0]; 
         ATPPacket * pkt = out_pkt->get_head();
-        if ((pkt->seq_nr) + ack_delta + my_seq_acked_by_peer_start <= my_seq_acked_by_peer)
+        if (out_pkt->full_seq_nr <= my_seq_acked_by_peer)
         {
             #if defined (ATP_LOG_AT_DEBUG)
                 log_debug(this, "Removing ATPPackct seq_nr:%u from buffer, peer_ack:%u, %u packet remain(including me)."
-                    , (pkt->seq_nr) + ack_delta + my_seq_acked_by_peer_start, my_seq_acked_by_peer, outbuf.size());
+                    , out_pkt->full_seq_nr, my_seq_acked_by_peer, outbuf.size());
             #endif
             update_rto(out_pkt);
-            std::pop_heap(outbuf.begin(), outbuf.end(), _cmp_outgoingpacket());
+            std::pop_heap(outbuf.begin(), outbuf.end(), _cmp_outgoingpacket_fullseq());
             outbuf.pop_back();
             used_window_packets --;
             used_window -= out_pkt->payload;

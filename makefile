@@ -19,8 +19,8 @@ demos: demo demo_file demo_poll
 demo: recv send 
 demo_file: sendfile recvfile 
 demo_poll: send_poll recv
-demos_cov: CFLAGS_COV = -fprofile-arcs -ftest-coverage -DATP_LOG_AT_NOTE -DATP_LOG_AT_DEBUG -DATP_LOG_UDP
-demos_cov: CFLAGS_COV_LNK = --coverage -DATP_LOG_AT_NOTE -DATP_LOG_AT_DEBUG -DATP_LOG_UDP
+demos_cov: CFLAGS_COV = -fprofile-arcs -ftest-coverage -DATP_LOG_AT_NOTE -DATP_LOG_AT_DEBUG -DATP_LOG_UDP -DATP_DEBUG_TEST_OVERFLOW
+demos_cov: CFLAGS_COV_LNK = --coverage -DATP_LOG_AT_NOTE -DATP_LOG_AT_DEBUG -DATP_LOG_UDP -DATP_DEBUG_TEST_OVERFLOW
 demos_cov: demo_file
 #	for name in `ls -al . | awk '{print $$NF}'| grep '.gcno$$' `;do mv $$name $(BIN_ROOT)/;done
 #	for name in `ls -al . | awk '{print $$NF}'| grep '.gcda$$' `;do mv $$name $(BIN_ROOT)/;done
@@ -60,16 +60,16 @@ send_poll: $(OBJS)
 	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/send_poll $(SRC_ROOT)/test/send_poll.cpp $(OBJS) -L/usr/lib/
 
 sendfile: $(OBJS)
-	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/sendfile $(SRC_ROOT)/test/sendfile.cpp $(OBJS) -L/usr/lib/
+	$(CXX) $(CFLAGS) -fprofile-arcs -ftest-coverage $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/sendfile $(SRC_ROOT)/test/sendfile.cpp $(OBJS) -L/usr/lib/
 
 recvfile: $(OBJS)
-	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/recvfile $(SRC_ROOT)/test/recvfile.cpp $(OBJS) -L/usr/lib/
+	$(CXX) $(CFLAGS) -fprofile-arcs -ftest-coverage $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/recvfile $(SRC_ROOT)/test/recvfile.cpp $(OBJS) -L/usr/lib/
 
 send_aio: $(OBJS)
 	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/send_aio $(SRC_ROOT)/test/send_aio.cpp $(OBJS) -L/usr/lib/ -lrt
 
 libatp.so: $(OBJS)
-	$(CXX) $(CXXFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/libatp.so -shared $(OBJS)
+	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/libatp.so -shared $(OBJS)
 
 libatp.a: $(OBJS)
 	ar rvs libatp.a $(OBJS)

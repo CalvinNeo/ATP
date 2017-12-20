@@ -31,11 +31,12 @@
 struct sockaddr_in srv_addr; socklen_t srv_len = sizeof(srv_addr);
 char textmsg[ATP_MIN_BUFFER_SIZE];
 
-atp_context * context;
 
 bool closed = false;
 
-void aio_completion_handler(sigval_t sigval)
+// make C happy
+std::function<void(sigval_t)> signal_callback;
+static void aio_completion_handler(atp_context * context, sigval_t sigval)
 {
     struct aiocb * my_aiocb = (struct aiocb *)sigval.sival_ptr;
     const char * msg = my_aiocb->aio_buf;
@@ -51,11 +52,16 @@ void aio_completion_handler(sigval_t sigval)
     }
 }
 
+static void signal_alarm_entry(sigval_t sigval){
+    signal_callback(sigval);
+}
+
 int main(){
+    using namespace std::placeholders;
     uint16_t serv_port = 9876;
 
     int n;
-
+    atp_context * context;
     context = atp_init();
     atp_socket * socket = atp_create_socket(context);
     int sockfd = atp_getfd(socket);
@@ -69,7 +75,9 @@ int main(){
     my_aiocb.aio_offset = 0;
 
     my_aiocb.aio_sigevent.sigev_notify = SIGEV_THREAD;
-    my_aiocb.aio_sigevent.sigev_notify_function = aio_completion_handler;
+    typedef void (*function_t) (sigval_t);
+    signal_callback = std::bind(aio_completion_handler, context, _1);
+    my_aiocb.aio_sigevent.sigev_notify_function = signal_alarm_entry;
     my_aiocb.aio_sigevent.sigev_notify_attributes = NULL;
     my_aiocb.aio_sigevent.sigev_value.sival_ptr = &my_aiocb;
 
