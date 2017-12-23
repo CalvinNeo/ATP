@@ -21,15 +21,38 @@ All APIs are available in [/src/atp.h](/src/atp.h), and is compatible with C89
 There are several demos:
 
 1. sender/receiver
-The demo includes two separated programs: the sender and the receiver. A File will be sent from the sender to the receiver.
-You can 
+
+    The demo includes two separated programs: the sender and the receiver. A File will be sent from the sender to the receiver.
+    You can set loss rate by modifying function `simulate_packet_loss_sendto` in [/src/atp_callback.cpp](/src/atp_callback.cpp).
+
+    Build it by
+
+        make demo_file
+
 2. send/recv
-This demo is similar to sender/receiver, send gets its input from stdin now.
+
+    This demo is similar to sender/receiver, instead of sending file, send/recv use stdin/stdout now.
+
+    Build it by
+
+        make demo
+
 3. send_poll
+
+    This demo implements the sender's part with `poll`.
+
+    Build it by
+
+        make demo_poll
+
 4. send_aio
 
+    This demo implements the sender's part with aio.
 
-    make demo
+    Build it by
+    
+        make send_aio
+
 
 # Docs
 [/docs/brief.md](/docs/brief.md)

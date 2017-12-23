@@ -197,7 +197,7 @@ void print_out(ATPSocket * socket, OutgoingPacket * out_pkt, const char * method
     {
         type += "U";
     }
-    if (pkt->get_opt())
+    if (pkt->opts_count > 0)
     {
         type += "O";
     }
@@ -219,6 +219,14 @@ void print_out(ATPSocket * socket, OutgoingPacket * out_pkt, const char * method
 ATPSocket * ATPContext::find_socket_by_fd(const ATPAddrHandle & handle_to, int sockfd){
     // find in listen
     // find port by sockfd
+    if (handle_to.host_port() == 0 && handle_to.host_addr() == 0)
+    {
+        // error
+        #if defined (ATP_LOG_AT_DEBUG)
+            log_debug(this, "Can't locate socket:[0.0.0.0:00000]");
+        #endif
+        return nullptr;
+    }
     sockaddr_in my_sock; socklen_t my_sock_len = sizeof(my_sock);
     getsockname(sockfd, reinterpret_cast<SA *>(&my_sock), &my_sock_len);
     ATPAddrHandle handle_me(reinterpret_cast<SA *>(&my_sock));
@@ -238,6 +246,14 @@ ATPSocket * ATPContext::find_socket_by_fd(const ATPAddrHandle & handle_to, int s
 
 ATPSocket * ATPContext::find_socket_by_head(const ATPAddrHandle & handle_to, ATPPacket * pkt){
     // find in look_up
+    if (handle_to.host_port() == 0 && handle_to.host_addr() == 0)
+    {
+        // error
+        #if defined (ATP_LOG_AT_DEBUG)
+            log_debug(this, "Can't locate socket:[0.0.0.0:00000]");
+        #endif
+        return nullptr;
+    }
     std::string hashing = std::string(ATPSocket::make_hash_code(pkt->peer_sock_id, handle_to));
     std::map<std::string, ATPSocket*>::iterator iter = this->look_up.find(hashing);
     if(iter != this->look_up.end()){

@@ -98,16 +98,15 @@ void log_note2(std::function<void(ATPContext *, char const *, va_list)> f, ATPCo
 #define PACKETFLAG_PSH 0x8
 #define PACKETFLAG_ACK 0x10
 #define PACKETFLAG_URG 0x20
-#define PACKETFLAG_OPT 0x40
-#define PACKETFLAG_MASK 0x7f
+#define PACKETFLAG_MASK 0xff
 
 struct PACKED_ATTRIBUTE ATPPacket : public CATPPacket{
     // apt packet layout, trivial
 
-#define MAKE_FLAGS_GETTER_SETTER(fn, mn) void set_##fn(char fn){ \
+#define MAKE_FLAGS_GETTER_SETTER(fn, mn) void set_##fn(uint8_t fn){ \
         if(fn == 1) flags |= mn; else flags &= (~mn); \
         flags &= PACKETFLAG_MASK; } \
-    char get_##fn() const{ return (flags & mn) == 0 ? 0 : 1;} 
+    uint8_t get_##fn() const{ return (flags & mn) == 0 ? 0 : 1;} 
 
     MAKE_FLAGS_GETTER_SETTER(fin, PACKETFLAG_FIN);
     MAKE_FLAGS_GETTER_SETTER(syn, PACKETFLAG_SYN);
@@ -115,7 +114,6 @@ struct PACKED_ATTRIBUTE ATPPacket : public CATPPacket{
     MAKE_FLAGS_GETTER_SETTER(psh, PACKETFLAG_PSH);
     MAKE_FLAGS_GETTER_SETTER(ack, PACKETFLAG_ACK);
     MAKE_FLAGS_GETTER_SETTER(urg, PACKETFLAG_URG);
-    MAKE_FLAGS_GETTER_SETTER(opt, PACKETFLAG_OPT);
 
     template <typename ... Args>
     static uint16_t create_flags(Args&& ... args){
@@ -125,7 +123,7 @@ struct PACKED_ATTRIBUTE ATPPacket : public CATPPacket{
         return f;
     }
 
-    bool has(char f) const{
+    bool has(uint8_t f) const{
         return (flags & f) == 0 ? 0 : 1;
     }
 
@@ -361,7 +359,7 @@ struct ATPSocket{
     uint64_t rto_timeout = 0; // at this exact time(ms) will this socket timeout
     uint64_t death_timeout = 0; // at this exact time change from TIME_WAIT to DESTROY
     uint64_t persist_timeout = 0; // at this exact time probe peer's window
-    uint32_t ack_delayed_time = 200;
+    uint32_t ack_delayed_time = 200; // default 200, set 0 to disable delayed ACK
     uint64_t delay_ack_timeout = 0; // at this exact time send delayed ACK
 
     uint16_t atp_retries1 = 3; // TCP RFC recommends 3
@@ -387,9 +385,11 @@ struct ATPSocket{
 
     atp_callback_func * callbacks[ATP_CALLBACK_SIZE];
 
-    char * sys_cache = nullptr;
 
     ~ATPSocket(){
+        #if defined (ATP_LOG_AT_DEBUG)
+            log_debug(this, "Socket destructed.");
+        #endif
         clear();
     }
     ATPSocket(ATPContext * _context);
@@ -400,11 +400,6 @@ struct ATPSocket{
 
     // INTERFACES
     void clear(){
-        if (sys_cache != nullptr)
-        {
-             delete [] sys_cache;
-             sys_cache = nullptr;
-        }
         for(OutgoingPacket * op : outbuf){
             delete op;
         }
@@ -500,6 +495,9 @@ struct ATPContext{
         init();
     }
     ~ATPContext(){
+        #if defined (ATP_LOG_AT_DEBUG)
+            fprintf(stderr, "Context destroyed.\n");
+        #endif
         clear();
     }
 
@@ -513,7 +511,6 @@ struct ATPContext{
     std::map<std::string, ATPSocket *> look_up;
     std::map<uint16_t, ATPSocket *> listen_sockets;
     std::vector<ATPSocket *> destroyed_sockets;
-
     uint64_t start_ms;
 
     uint16_t new_sock_id(){
@@ -545,6 +542,8 @@ struct ATPContext{
 
     ATP_PROC_RESULT daily_routine(){
         // notify all exsiting sockets
+        // trigger1: once a message arrived
+        // trigger2: timeout
         ATP_PROC_RESULT result = ATP_PROC_OK;
         for(ATPSocket * socket: this->sockets){
             ATP_PROC_RESULT sub_result = socket->check_timeout();
@@ -571,8 +570,12 @@ struct ATPContext{
         if (this->sockets.size() == 0 && this->destroyed_sockets.size() == 0)
         {
             #if defined (ATP_LOG_AT_DEBUG)
-                log_debug(this, "Destroying context.");
+                log_debug(this, "Context finished.");
             #endif
+            // There's no sockets active
+            // Case 1: If ATP is built in an user program, user catchs the return value ATP_PROC_FINISH,
+            // if he has no other missions, he can destroy the context safely by calling `exit(0)`
+            // Case 2: If ATP is a service, user should not handle the return value ATP_PROC_FINISH,
             return ATP_PROC_FINISH;
         }else{
             return result;
@@ -583,10 +586,6 @@ struct ATPContext{
     ATPSocket * find_socket_by_head(const ATPAddrHandle & handle_to, ATPPacket * pkt);
 };
 
-inline ATPContext & get_context(){
-    static ATPContext context;
-    return context;
-}
 
 void print_out(ATPSocket * socket, OutgoingPacket * out_pkt, const char * method);
 

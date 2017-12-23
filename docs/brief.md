@@ -10,7 +10,7 @@ Rather than TCP, which is a flow-oriented protocol, ATP is based on sending and 
 
 The ATP Header(10 bytes):
     
-    0       7 8      15
+    0       7 8       f
     +........+........+
     +       seq       +
     +........+........+
@@ -18,16 +18,36 @@ The ATP Header(10 bytes):
     +........+........+
     +     sock_id     +
     +........+........+
-    +      flags      +
+    +  opts  +  flags +
     +........+........+
     +      window     +
+    +........+........+
+
+The flags are
+
+    0       7 8       f
+    +........+........+
+    +        +  UAPRSF+
+    +  opts  +  RCSSYI+
+    +        +  GKHTNN+
+    +........+........+
+    
+When opts is set not equal to 0, there are options at the beginning of user data.
+
+The option fields:
+    
+    0       7 8       f
+    +........+........+
+    +  kind  + length +
+    +........+........+
+    +      data       +
     +........+........+
 
 
 # Design of ATP Socket
 
-
 # API usages
+
 
 # Debug
 

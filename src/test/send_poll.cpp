@@ -43,7 +43,7 @@ int main(){
     char ipaddr_str[INET_ADDRSTRLEN];
     int n;
 
-    atp_context * context = atp_init();
+    atp_context * context = atp_create_context();
     atp_socket * socket = atp_create_socket(context);
     int sockfd = atp_getfd(socket);
 
@@ -101,5 +101,6 @@ int main(){
         }
 
     }
+    delete context; context = nullptr;
     return 0;
 };

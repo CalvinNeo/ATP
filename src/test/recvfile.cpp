@@ -19,6 +19,8 @@
 */
 #include "../atp.h"
 #include "../udp_util.h"
+#include "test.h"
+#include <unistd.h>
 
 FILE * fout;
 
@@ -27,8 +29,7 @@ ATP_PROC_RESULT data_arrived(atp_callback_arguments * args){
     size_t length = args->length; 
     const char * data = args->data;
 
-    fprintf(fout, "%.*s", length, data);
-    
+    fwrite(data, 1, length, fout);
     return ATP_PROC_OK;
 }
 
@@ -51,9 +52,21 @@ void reg_sigterm_handler(void (*handler)(int s))
     }
 }
 
-int main(){
+int main(int argc, char* argv[], char* env[]){
+    int oc;
+    bool simulate_loss = false;
+    while((oc = getopt(argc, argv, "l")) != -1)
+    {
+        switch(oc)
+        {
+        case 'l':
+            simulate_loss = true;
+            break;
+        }
+    }
+
     reg_sigterm_handler(sigterm_handler);
-    fout = fopen("out.dat", "w");
+    fout = fopen("out.dat", "wb");
 
     uint16_t serv_port = 9876;
     struct sockaddr_in cli_addr; socklen_t cli_len = sizeof(cli_addr);
@@ -62,16 +75,20 @@ int main(){
     char msg[ATP_MAX_READ_BUFFER_SIZE];
     int n;
 
-    atp_context * context = atp_init();
+    atp_context * context = atp_create_context();
     atp_socket * socket = atp_create_socket(context);
     int sockfd = atp_getfd(socket);
     atp_set_callback(socket, ATP_CALL_ON_RECV, data_arrived);
+    if(simulate_loss){
+        atp_set_callback(socket, ATP_CALL_SENDTO, simulate_packet_loss_sendto);
+    }else{
+        atp_set_callback(socket, ATP_CALL_SENDTO, normal_sendto);
+    }
 
     srv_addr = make_socketaddr_in(AF_INET, nullptr, serv_port);
 
     if (bind(sockfd, (SA *) &srv_addr, sizeof srv_addr) < 0)
         err_sys("bind error");
-
     atp_listen(socket, serv_port);
     if(atp_accept(socket) != ATP_PROC_OK){
         puts("Connection Abort.");
@@ -81,10 +98,12 @@ int main(){
     ATP_PROC_RESULT result;
     while (true) {
         sockaddr * pcli_addr = (SA *)&cli_addr;
-
         if ((n = recvfrom(sockfd, msg, ATP_MAX_READ_BUFFER_SIZE, 0, pcli_addr, &cli_len)) < 0){
-            if(!(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN)) break; 
+            if(!(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN)) {
+                break; 
+            }
             if(atp_timer_event(context, 1000) == ATP_PROC_FINISH){
+                // Context finished, mission completed, quit
                 break;
             }
         }else{
@@ -103,5 +122,7 @@ int main(){
             break;
         }
     }
+    puts("Quit.");
+    delete context; context = nullptr;
     return 0;
 }

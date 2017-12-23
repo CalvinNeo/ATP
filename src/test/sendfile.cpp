@@ -19,8 +19,22 @@
 */
 #include "../atp.h"
 #include "../udp_util.h"
+#include "test.h"
+#include <unistd.h>
 
-int main(){
+int main(int argc, char* argv[], char* env[]){
+    int oc;
+    bool simulate_loss = false;
+    while((oc = getopt(argc, argv, "l")) != -1)
+    {
+        switch(oc)
+        {
+        case 'l':
+            simulate_loss = true;
+            break;
+        }
+    }
+
     uint16_t serv_port = 9876;
     struct sockaddr_in cli_addr; 
     struct sockaddr_in srv_addr; socklen_t srv_len = sizeof(srv_addr);
@@ -29,10 +43,14 @@ int main(){
     char textmsg[ATP_MIN_BUFFER_SIZE];
     int n;
 
-    atp_context * context = atp_init();
+    atp_context * context = atp_create_context();
     atp_socket * socket = atp_create_socket(context);
     int sockfd = atp_getfd(socket);
-
+    if(simulate_loss){
+        atp_set_callback(socket, ATP_CALL_SENDTO, simulate_packet_loss_sendto);
+    }else{
+        atp_set_callback(socket, ATP_CALL_SENDTO, normal_sendto);
+    }
 
     // char ip_addr_str[1000]; // "172.19.143.183"
     // printf("please input dest ip_addr\n");
@@ -44,31 +62,34 @@ int main(){
         return 0;
     }
 
-    FILE * fin = fopen("in.dat", "r");
+    FILE * fin = fopen("in.dat", "rb");
     while (true) {
         sockaddr * psock_addr = (SA *)&srv_addr;
         if ((n = recvfrom(sockfd, msg, ATP_MAX_READ_BUFFER_SIZE, 0, psock_addr, &srv_len)) >= 0){
             ATP_PROC_RESULT result = atp_process_udp(context, sockfd, msg, n, (const SA *)&srv_addr, srv_len);
             if (result == ATP_PROC_FINISH)
             {
+                // `atp_process_udp` called `atp_timer_event` which returned ATP_PROC_FINISH
                 break;
             }
         }else{
             if(!(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN)) break;
             if(atp_timer_event(context, 1000) == ATP_PROC_FINISH){
+                // Context finished, mission completed, quit
                 break;
             }
         }
         if(!feof(fin)){
-            if(fgets(textmsg, ATP_MIN_BUFFER_SIZE, fin) == NULL){
+            size_t nn = fread(&textmsg, 1, ATP_MIN_BUFFER_SIZE, fin);
+            if(nn == 0){
                 continue;
             }else{
-                n = strlen(textmsg);
-                atp_write(socket, textmsg, n);
+                atp_write(socket, textmsg, nn);
             }
         }else{
             if (atp_send_status(socket) == ATP_PROC_OK)
             {
+                // all packets are ACKed
                 puts("Trans Finished");
                 atp_close(socket);
                 break;
@@ -76,5 +97,7 @@ int main(){
         }
     }
     fclose(fin);
+    puts("Quit.");
+    delete context; context = nullptr;
     return 0;
 };

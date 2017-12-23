@@ -17,11 +17,32 @@
 *   with this program; if not, write to the Free Software Foundation, Inc.,
 *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 */
-#include "../scaffold.h"
 
-int main(){
-    for (int i = 0; i < 15; ++i)
-    {
-        
+#include "atp_impl.h"
+#include "udp_util.h"
+#include "atp.h"
+#include <poll.h>
+
+
+struct ATPContextSVC{
+    ATPContext * context;
+    void start_timer(){
+
     }
+    void stop_timer(){
+
+    }
+    ATPContextSVC(){
+        context = new ATPContext();
+        context->init();
+    }
+};
+
+ATPContextSVC & get_contextsvc(){
+    static ATPContextSVC contextsvc;
+    return contextsvc;
+}
+
+atp_context * atp_create_server_context(){
+    return get_contextsvc().context;
 }

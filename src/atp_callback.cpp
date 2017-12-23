@@ -22,7 +22,7 @@
 #include "udp_util.h"
 #include <random>
 
-auto normal_sendto = [](atp_callback_arguments * args){
+ATP_PROC_RESULT normal_sendto(atp_callback_arguments * args){
     atp_socket * socket = args->socket;
     const struct sockaddr * sa = args->addr;
     ATPPacket * pkt = (ATPPacket *)args->data;
@@ -30,7 +30,7 @@ auto normal_sendto = [](atp_callback_arguments * args){
     #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
         // const sockaddr_in * sk = (const sockaddr_in *)sa;
         ATPAddrHandle handle(sa);
-        log_debug(socket, "Call sendto :%s, UDP Send %u bytes.", handle.to_string(), args->length);
+        log_debug(socket, "Call sendto dest %s, UDP Send %u bytes.", handle.to_string(), args->length);
     #endif
     if(n != args->length){
         return ATP_PROC_ERROR;
@@ -38,7 +38,7 @@ auto normal_sendto = [](atp_callback_arguments * args){
         return ATP_PROC_OK;
     }
 };
-auto simulate_packet_loss_sendto = [](atp_callback_arguments * args) -> ATP_PROC_RESULT{
+ATP_PROC_RESULT simulate_packet_loss_sendto(atp_callback_arguments * args){
     static std::default_random_engine e{get_current_ms()};
     static std::uniform_real_distribution<double> u{0, 1};
     double drop_rate_judge = u(e);
@@ -50,6 +50,7 @@ auto simulate_packet_loss_sendto = [](atp_callback_arguments * args) -> ATP_PROC
         return normal_sendto(args);
     }
 };
+
 void init_callbacks(ATPSocket * socket){
     socket->callbacks[ATP_CALL_ON_ERROR] = nullptr; 
     socket->callbacks[ATP_CALL_ON_STATE_CHANGE] = nullptr;
@@ -63,6 +64,7 @@ void init_callbacks(ATPSocket * socket){
         return ATP_PROC_OK;
     };
     socket->callbacks[ATP_CALL_ON_ACCEPT] = nullptr;
+    socket->callbacks[ATP_CALL_ON_ESTABLISHED] = nullptr;
     socket->callbacks[ATP_CALL_BIND] = [](atp_callback_arguments * args){
         atp_socket * socket = args->socket;
         const struct sockaddr * sa = args->addr;

@@ -62,7 +62,7 @@ int main(){
 
     int n;
     atp_context * context;
-    context = atp_init();
+    context = atp_create_context();
     atp_socket * socket = atp_create_socket(context);
     int sockfd = atp_getfd(socket);
 
@@ -102,5 +102,6 @@ int main(){
         atp_write(socket, textmsg, n);
         usleep(500 * 1000); // sleep 500ms
     }
+    delete context; context = nullptr;
     return 0;
 };

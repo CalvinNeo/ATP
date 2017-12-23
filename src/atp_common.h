@@ -97,6 +97,7 @@ enum ATP_CALLBACKTYPE_ENUM{
     ATP_CALL_CONNECT,
     ATP_CALL_BEFORE_ACCEPT,
     ATP_CALL_ON_ACCEPT,
+    ATP_CALL_ON_ESTABLISHED,
     ATP_CALL_SENDTO,
     ATP_CALL_ON_RECV,
     ATP_CALL_ON_PEERCLOSE,
@@ -131,8 +132,10 @@ struct atp_iovec {
 struct PACKED_ATTRIBUTE CATPPacket{
     // ATP packet layout, trivial
     // seq_nr and ack_nr are now packet-wise rather than byte-wise
-    uint16_t seq_nr; uint16_t ack_nr;
-    uint16_t peer_sock_id; uint16_t flags;
+    uint16_t seq_nr; 
+    uint16_t ack_nr;
+    uint16_t peer_sock_id; 
+    uint8_t opts_count; uint8_t flags;
     uint16_t window_size;
 };
 
@@ -149,7 +152,7 @@ static const size_t MAX_ADP_PAYLOAD = ATP_IP_MTU - IPV4_HEADER_SIZE - UDP_HEADER
 static const size_t ATP_MAX_WRITE_BUFFER_SIZE = MAX_UDP_PAYLOAD;
 static const size_t ATP_MAX_READ_BUFFER_SIZE = MAX_UDP_PAYLOAD;
 // recommended size of buffer, when calling write once, +1 is for the last '\0'
-static const size_t ATP_MIN_BUFFER_SIZE = ETHERNET_MTU - IPV4_HEADER_SIZE - sizeof(CATPPacket) - UDP_HEADER_SIZE + 1;
+static const size_t ATP_MIN_BUFFER_SIZE = ETHERNET_MTU - IPV4_HEADER_SIZE - sizeof(CATPPacket) - UDP_HEADER_SIZE;
 // The "MSS" to avoid IP fragmentation, range from [ATP_MSS_CEILING, ATP_MSS_FLOOR]
 static const size_t ATP_MSS_CEILING = ETHERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE - sizeof(CATPPacket);
 static const size_t ATP_MSS_FLOOR = INTERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE - sizeof(CATPPacket);

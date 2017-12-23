@@ -11,7 +11,7 @@ OBJ_ROOT = $(BIN_ROOT)/obj
 SRCS = $(wildcard $(SRC_ROOT)/*.cpp)
 OBJS = $(patsubst $(SRC_ROOT)%, $(OBJ_ROOT)%, $(patsubst %cpp, %o, $(SRCS)))
 
-all: demos lib
+all: lib demos
 
 demos: CFLAGS_COV = 
 demos: CFLAGS_COV_LNK = 
@@ -20,15 +20,18 @@ demo: recv send
 demo_file: sendfile recvfile 
 demo_poll: send_poll recv
 demos_cov: CFLAGS_COV = -fprofile-arcs -ftest-coverage -DATP_LOG_AT_NOTE -DATP_LOG_AT_DEBUG -DATP_LOG_UDP -DATP_DEBUG_TEST_OVERFLOW
-demos_cov: CFLAGS_COV_LNK = --coverage -DATP_LOG_AT_NOTE -DATP_LOG_AT_DEBUG -DATP_LOG_UDP -DATP_DEBUG_TEST_OVERFLOW
+demos_cov: CFLAGS_COV_LNK = -fprofile-arcs -ftest-coverage --coverage -DATP_LOG_AT_NOTE -DATP_LOG_AT_DEBUG -DATP_LOG_UDP -DATP_DEBUG_TEST_OVERFLOW
 demos_cov: demo_file
 #	for name in `ls -al . | awk '{print $$NF}'| grep '.gcno$$' `;do mv $$name $(BIN_ROOT)/;done
 #	for name in `ls -al . | awk '{print $$NF}'| grep '.gcda$$' `;do mv $$name $(BIN_ROOT)/;done
 
 run_test:
 	sudo python $(SRC_ROOT)/test/makedata.py
-	$(BIN_ROOT)/recvfile & 
-	$(BIN_ROOT)/sendfile 
+	python $(SRC_ROOT)/test/run_test.py
+	# ./bin/recvfile 2> r.log 1> r1.log & 
+	# ./bin/sendfile 2> s.log 1> s1.log &
+	# wait %2
+	# wait %3
 
 run_cov: run_test
 	gcov -r -o *.gcno
@@ -38,41 +41,43 @@ run_lcov:
 	lcov -c -o ATP.lcov.info -d $(OBJ_ROOT)/
 	genhtml ATP.lcov.info -o ATPLCovHTML
 
+# --verbose 
 run_coveralls_local: run_cov
-	coveralls -b ./ -r ./ --dryrun --verbose --gcov-options '\-r'
+	coveralls -b ./ -r ./ --dryrun --gcov-options '\-r'
 
 run_coveralls: run_cov
 	coveralls -b ./ -r ./ --gcov-options '\-r'
 
 
-lib: libatp.so libatp.a
+lib: $(BIN_ROOT)/libatp.so $(BIN_ROOT)/libatp.a
 
 buffer_test: 
-	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/buffer_test $(SRC_ROOT)/test/buffer_test.cpp -L/usr/lib/
+	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/buffer_test $(SRC_ROOT)/test/buffer_test.cpp -L/usr/lib/ $(BIN_ROOT)/libatp.a
 
-recv: $(OBJS)
-	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/recv $(SRC_ROOT)/test/recv.cpp $(OBJS) -L/usr/lib/
+recv: $(BIN_ROOT)/libatp.a
+	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/recv $(SRC_ROOT)/test/recv.cpp -L/usr/lib/ $(BIN_ROOT)/libatp.a
 
-send: $(OBJS)
-	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/send $(SRC_ROOT)/test/send.cpp $(OBJS) -L/usr/lib/
+send: $(BIN_ROOT)/libatp.a
+	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/send $(SRC_ROOT)/test/send.cpp -L/usr/lib/ $(BIN_ROOT)/libatp.a
 
-send_poll: $(OBJS)
-	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/send_poll $(SRC_ROOT)/test/send_poll.cpp $(OBJS) -L/usr/lib/
+send_poll: $(BIN_ROOT)/libatp.a
+	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/send_poll $(SRC_ROOT)/test/send_poll.cpp $(OBJS) -L/usr/lib/ $(BIN_ROOT)/libatp.a
 
-sendfile: $(OBJS)
-	$(CXX) $(CFLAGS) -fprofile-arcs -ftest-coverage $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/sendfile $(SRC_ROOT)/test/sendfile.cpp $(OBJS) -L/usr/lib/
+sendfile: $(BIN_ROOT)/libatp.a
+	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/sendfile $(SRC_ROOT)/test/sendfile.cpp -L/usr/lib/ $(BIN_ROOT)/libatp.a
 
-recvfile: $(OBJS)
-	$(CXX) $(CFLAGS) -fprofile-arcs -ftest-coverage $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/recvfile $(SRC_ROOT)/test/recvfile.cpp $(OBJS) -L/usr/lib/
+recvfile: $(BIN_ROOT)/libatp.a
+	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/recvfile $(SRC_ROOT)/test/recvfile.cpp -L/usr/lib/ $(BIN_ROOT)/libatp.a
 
-send_aio: $(OBJS)
-	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/send_aio $(SRC_ROOT)/test/send_aio.cpp $(OBJS) -L/usr/lib/ -lrt
+send_aio: $(BIN_ROOT)/libatp.a
+	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/send_aio $(SRC_ROOT)/test/send_aio.cpp -L/usr/lib/ -lrt $(BIN_ROOT)/libatp.a
 
-libatp.so: $(OBJS)
+$(BIN_ROOT)/libatp.so: $(OBJS)
 	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/libatp.so -shared $(OBJS)
 
-libatp.a: $(OBJS)
-	ar rvs libatp.a $(OBJS)
+$(BIN_ROOT)/libatp.a: $(OBJS)
+	ar rvs $(BIN_ROOT)/libatp.a $(OBJS)
+
 
 $(OBJ_ROOT)/%.o: $(SRC_ROOT)/%.cpp $(OBJ_ROOT)
 	$(CXX) -c $(CFLAGS) $(CFLAGS_COV) $< -o $@
@@ -85,7 +90,7 @@ clean: clean_cov
 	rm -rf $(BIN_ROOT)
 .PHONY: cleand
 cleand:
-	rm -r core
+	rm -f core
 .PHONY: clean_cov
 clean_cov:
 	find ./ -name "*.info" -delete
@@ -93,3 +98,4 @@ clean_cov:
 	find ./ -name "*.gcda" -delete
 	find ./ -name "*.gcno" -delete
 	rm -rf ./ATPLCovHTML
+	rm -f *.log

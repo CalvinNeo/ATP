@@ -23,46 +23,61 @@
 #include "atp.h"
 #include <functional>
 
-atp_context * atp_init(){
-    get_context().init();
-    return &get_context();
+
+atp_context * atp_create_context(){
+    ATPContext * context = new ATPContext();
+    return context;
+}
+
+// make C happy
+static std::function<void(sigval_t)> signal_callback;
+static void signal_entry(sigval_t sigval){
+    signal_callback(sigval);
 }
 
 static sigfunc_t * origin_sigfunc;
-static void alarm_handler(int interval){
-    ATP_PROC_RESULT result = atp_timer_event(&get_context(), 1000);
-    if (result == ATP_PROC_FINISH)
-    {
-        // stop triggering
-        alarm(0);
-        setup_signal(SIGALRM, origin_sigfunc);
-    }else{
-        alarm(1);
-    }
-}
 
 static ATP_PROC_RESULT sys_loop(atp_socket * socket, std::function<int(atp_socket*)> predicate){ 
+    static char sys_cache[ATP_SYSCACHE_MAX];
     if(socket == nullptr) return ATP_PROC_ERROR;
     // sys loop with blocked socket
-    ATP_PROC_RESULT result; 
-    origin_sigfunc = setup_signal(SIGALRM, alarm_handler);
-    alarm(1);
-    socket->sys_cache = new char [ATP_SYSCACHE_MAX];
+    ATP_PROC_RESULT result;
+    ATPContext * context = socket->context;
+    // set timeout
+    // Even if timeout is not set, recvfrom will not be forever blocked because of `alarm(1)`
     struct timeval tv;
     tv.tv_sec = 5;
-    ATPContext * context = socket->context;
     setsockopt(socket->sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    // set timer
+    signal_callback = [context](sigval_t sig){
+        // TODO I don't know why capture `&` is not work
+        ATP_PROC_RESULT result = atp_timer_event(context, 1000);
+        if (result == ATP_PROC_FINISH)
+        {
+            // stop triggering
+            alarm(0);
+            setup_signal(SIGALRM, origin_sigfunc);
+        }else{
+            alarm(1);
+        }
+    };
+    origin_sigfunc = setup_signal(SIGALRM, signal_entry);
+    alarm(1);
+    // main loop
     while (true) {
         struct sockaddr_in peer_addr; socklen_t peer_len = sizeof(peer_addr);
         sockaddr * ppeer_addr = (SA *)&peer_addr;
-        int n = recvfrom(socket->sockfd, socket->sys_cache, ATP_SYSCACHE_MAX, 0, ppeer_addr, &peer_len);
+        int n = recvfrom(socket->sockfd, sys_cache, ATP_SYSCACHE_MAX, 0, ppeer_addr, &peer_len);
         if (n < 0){
             if(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN){
                 // normal, timeout
                 if(atp_timer_event(context, 1000) == ATP_PROC_FINISH){
+                    // Context finished, mission completed, quit
                     break;
                 }
             }else{
+                // Error
+                result = ATP_PROC_ERROR;
                 break;
             }
         }else{    
@@ -70,7 +85,7 @@ static ATP_PROC_RESULT sys_loop(atp_socket * socket, std::function<int(atp_socke
                 log_debug(socket, "sys_loop Recv %d bytes.", n);
             #endif
             ATPAddrHandle handle_to(reinterpret_cast<const SA *>(&peer_addr));
-            socket->process(handle_to, socket->sys_cache, n);
+            socket->process(handle_to, sys_cache, n);
         }
         // TODO: here socket may be already deleted by context
         result = predicate(socket);
@@ -84,8 +99,6 @@ static ATP_PROC_RESULT sys_loop(atp_socket * socket, std::function<int(atp_socke
             break;
         }
     }
-    delete [] socket->sys_cache;
-    socket->sys_cache = nullptr;
     return result;
 }
 
@@ -165,34 +178,22 @@ ATP_PROC_RESULT atp_process_udp(atp_context * context, int sockfd, const char * 
     if(socket == nullptr) return ATP_PROC_ERROR;
     ATPAddrHandle handle_to(to);
     ATP_PROC_RESULT result = ATP_PROC_OK;
-    if (handle_to.host_port() == 0 && handle_to.host_addr() == 0)
-    {
-        // error
-        #if defined (ATP_LOG_AT_DEBUG)
-            log_debug(context, "Can't locate socket:[0.0.0.0:00000]");
-        #endif
-        return ATP_PROC_ERROR;
-    }
     const ATPPacket * pkt = reinterpret_cast<const ATPPacket *>(buf);
     bool is_first = pkt->get_syn() && !(pkt->get_ack());
+    ATPSocket * socket = nullptr;
     if (is_first)
     {
         // find in listen
-        ATPSocket * socket = context->find_socket_by_fd(handle_to, sockfd);
-        if (socket == nullptr)
-        {
-            return ATP_PROC_ERROR;
-        }else{
-            result = socket->process(handle_to, buf, len);
-        }
+        socket = context->find_socket_by_fd(handle_to, sockfd);
     } else{
-        ATPSocket * socket = context->find_socket_by_head(handle_to, pkt);
-        if (socket == nullptr)
-        {
-            return ATP_PROC_ERROR;
-        }else{
-            result = socket->process(handle_to, buf, len);
-        }
+        // find by packet
+        socket = context->find_socket_by_head(handle_to, pkt);
+    }
+    if (socket == nullptr)
+    {
+        return ATP_PROC_ERROR;
+    }else{
+        result = socket->process(handle_to, buf, len);
     }
     return context->daily_routine();
 }

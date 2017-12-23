@@ -29,10 +29,12 @@
 extern "C" {
 #endif
 
-atp_context * atp_init();
+atp_context * atp_create_server_context();
+atp_context * atp_create_context();
 atp_socket * atp_create_socket(atp_context * context);
 int atp_getfd(atp_socket * socket);
 ATP_PROC_RESULT atp_listen(atp_socket * socket, uint16_t port);
+// set callback ATP_CALL_ON_ESTABLISHED before calling
 ATP_PROC_RESULT atp_async_connect(atp_socket * socket, const struct sockaddr * to, socklen_t tolen);
 ATP_PROC_RESULT atp_connect(atp_socket * socket, const struct sockaddr * to, socklen_t tolen);
 ATP_PROC_RESULT atp_async_accept(atp_socket * socket, const struct sockaddr * to, socklen_t tolen);

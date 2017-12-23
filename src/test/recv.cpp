@@ -38,7 +38,7 @@ int main(){
     char msg[ATP_MAX_READ_BUFFER_SIZE];
     int n;
 
-    atp_context * context = atp_init();
+    atp_context * context = atp_create_context();
     atp_socket * socket = atp_create_socket(context);
     int sockfd = atp_getfd(socket);
     atp_set_callback(socket, ATP_CALL_ON_RECV, data_arrived);
@@ -57,13 +57,19 @@ int main(){
         sockaddr * pcli_addr = (SA *)&cli_addr;
 
         if ((n = recvfrom(sockfd, msg, ATP_MAX_READ_BUFFER_SIZE, 0, pcli_addr, &cli_len)) < 0){
-            if(!(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN)) break; else continue;
-        }
-        ATP_PROC_RESULT result = atp_process_udp(context, sockfd, msg, n, (const SA *)&cli_addr, cli_len);
-        if (result == ATP_PROC_FINISH)
-        {
-            break;
+            if(!(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN)) break;  
+            if(atp_timer_event(context, 1000) == ATP_PROC_FINISH){
+                // Context finished, mission completed, quit
+                break;
+            }
+        }else{
+            ATP_PROC_RESULT result = atp_process_udp(context, sockfd, msg, n, (const SA *)&cli_addr, cli_len);
+            if (result == ATP_PROC_FINISH)
+            {
+                break;
+            }
         }
     }
+    delete context; context = nullptr;
     return 0;
 }
