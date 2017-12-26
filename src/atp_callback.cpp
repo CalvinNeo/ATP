@@ -27,14 +27,19 @@ ATP_PROC_RESULT normal_sendto(atp_callback_arguments * args){
     const struct sockaddr * sa = args->addr;
     ATPPacket * pkt = (ATPPacket *)args->data;
     int n = sendto(socket->sockfd, args->data, args->length, 0, sa, args->addr_len);
-    #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
-        // const sockaddr_in * sk = (const sockaddr_in *)sa;
-        ATPAddrHandle handle(sa);
-        log_debug(socket, "Call sendto dest %s, UDP Send %u bytes.", handle.to_string(), args->length);
-    #endif
     if(n != args->length){
+        #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
+            // const sockaddr_in * sk = (const sockaddr_in *)sa;
+            ATPAddrHandle handle(sa);
+            log_debug(socket, "Call sendto dest %s Failed with code %d.", handle.hash_code(), n);
+        #endif
         return ATP_PROC_ERROR;
     }else{
+        #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
+            // const sockaddr_in * sk = (const sockaddr_in *)sa;
+            ATPAddrHandle handle(sa);
+            log_debug(socket, "Call sendto dest %s, UDP Send %d bytes.", handle.hash_code(), n);
+        #endif
         return ATP_PROC_OK;
     }
 };

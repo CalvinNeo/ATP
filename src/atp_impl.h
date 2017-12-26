@@ -42,23 +42,24 @@
 // #define ATP_DEBUG_TEST_OVERFLOW
 
 #define _log_doit _log_doit1
-void _log_doit1(ATPSocket * socket, char const* func_name, int level, char const * fmt, va_list va);
-void _log_doit1(ATPContext * context, char const* func_name, int level, char const * fmt, va_list va);
+void _log_doit1(ATPSocket * socket, char const* func_name, int line, int level, char const * fmt, va_list va);
+void _log_doit1(ATPContext * context, char const* func_name, int line, int level, char const * fmt, va_list va);
 struct _log_doit2{
     operator std::function<void(ATPSocket *, char const *, va_list)> () const{
         return [&](ATPSocket * x, char const * fmt, va_list va){
-            _log_doit1(x, func_name, level, fmt, va);
+            _log_doit1(x, func_name, line, level, fmt, va);
         };
     }
     operator std::function<void(ATPContext *, char const *, va_list)> () const{
         return [&](ATPContext * x, char const * fmt, va_list va){
-            _log_doit1(x, func_name, level, fmt, va);
+            _log_doit1(x, func_name, line, level, fmt, va);
         };
     }
-    _log_doit2(const char* f, int l) : func_name(f), level(l){
+    _log_doit2(const char* f, int line_no, int l) : func_name(f), level(l), line(line_no){
 
     }
     const char* func_name;
+    int line;
     int level;
 };
 void log_fatal1(ATPSocket * socket, char const *fmt, ...);
@@ -73,9 +74,9 @@ void log_note2(std::function<void(ATPSocket *, char const *, va_list)> f, ATPSoc
 void log_fatal2(std::function<void(ATPContext *, char const *, va_list)> f, ATPContext * context, char const *fmt, ...);
 void log_debug2(std::function<void(ATPContext *, char const *, va_list)> f, ATPContext * context, char const *fmt, ...);
 void log_note2(std::function<void(ATPContext *, char const *, va_list)> f, ATPContext * context, char const *fmt, ...);
-#define _log_fatal2(s, f, ...) log_fatal2(_log_doit2(__FUNCTION__, LOGLEVEL_FATAL), s, f, ##__VA_ARGS__)
-#define _log_debug2(s, f,...) log_debug2(_log_doit2(__FUNCTION__, LOGLEVEL_DEBUG), s, f, ##__VA_ARGS__)
-#define _log_note2(s, f, ...) log_note2(_log_doit2(__FUNCTION__, LOGLEVEL_NOTE), s, f, ##__VA_ARGS__)
+#define _log_fatal2(s, f, ...) log_fatal2(_log_doit2(__FUNCTION__, __LINE__, LOGLEVEL_FATAL), s, f, ##__VA_ARGS__)
+#define _log_debug2(s, f,...) log_debug2(_log_doit2(__FUNCTION__, __LINE__, LOGLEVEL_DEBUG), s, f, ##__VA_ARGS__)
+#define _log_note2(s, f, ...) log_note2(_log_doit2(__FUNCTION__, __LINE__, LOGLEVEL_NOTE), s, f, ##__VA_ARGS__)
 // #define _log_fatal2(...) log_fatal2(_log_doit2(__FUNCTION__, LOGLEVEL_FATAL), __VA_ARGS__)
 // #define _log_debug2(...) log_debug2(_log_doit2(__FUNCTION__, LOGLEVEL_DEBUG), __VA_ARGS__)
 // #define _log_note2(...) log_note2(_log_doit2(__FUNCTION__, LOGLEVEL_NOTE), __VA_ARGS__)
@@ -99,6 +100,13 @@ void log_note2(std::function<void(ATPContext *, char const *, va_list)> f, ATPCo
 #define PACKETFLAG_ACK 0x10
 #define PACKETFLAG_URG 0x20
 #define PACKETFLAG_MASK 0xff
+
+enum{
+    ATP_OPT_SOCKID = 0,
+    ATP_OPT_MSS,
+    ATP_OPT_SACK,
+    ATP_OPT_SACKOPT
+};
 
 struct PACKED_ATTRIBUTE ATPPacket : public CATPPacket{
     // apt packet layout, trivial
@@ -238,11 +246,16 @@ private:
 
 struct OutgoingPacket{
     ~OutgoingPacket(){
+        #if defined (ATP_LOG_AT_DEBUG)
+            fprintf(stderr, "Packet destructed.\n");
+        #endif
         if(holder)
             destroy();
     }
+
     bool holder = true;
     bool marked = false;
+    bool selective_acked = false;
     size_t length = 0; // length of the whole
     size_t payload = 0;
     uint64_t timestamp; // microseconds
@@ -256,9 +269,38 @@ struct OutgoingPacket{
         std::free(data);
         data = nullptr;
     }
+    char * find_option(uint8_t opt_kind){
+        char * p = data + sizeof(ATPPacket);
+        for(uint8_t i = 0; i < get_head()->opts_count; i++){
+            uint8_t k = *reinterpret_cast<uint8_t*>(p);
+            uint8_t l = *reinterpret_cast<uint8_t*>(p + sizeof(uint8_t));
+            if(k == opt_kind){
+                return p;
+            }
+            p += 2 * sizeof(uint8_t);
+            p += l;
+        }
+        return nullptr;
+    }
+    size_t real_payload() const{
+        // payload without options
+        size_t option_len = 0;
+        char * p = data + sizeof(ATPPacket);
+        for(uint8_t i = 0; i < get_head()->opts_count; i++){
+            uint8_t l = *reinterpret_cast<uint8_t*>(p + sizeof(uint8_t));
+            option_len += 2 * sizeof(uint8_t);
+            option_len += l;
+            p += 2 * sizeof(uint8_t);
+            p += l;
+        }
+        assert(payload >= option_len);
+        return payload - option_len;
+    }
+
     bool is_empty_ack() const{
         return !is_promised_packet();
     }
+
     bool is_promised_packet() const{
         // a promist packet will be resend if not got ACK from peer
         // only promised packet has seq_nr
@@ -270,15 +312,22 @@ struct OutgoingPacket{
             // an payload == 0 packet must ACK
             assert(get_head()->get_ack());
             return false;
+        }else if(get_head()->opts_count > 0 && real_payload() == 0){
+            // with option
+            return false;
         }
         return true;
     }
+
     bool has_user_data() const{
+        if(get_head()->get_syn() || get_head()->get_fin()){
+            return false;
+        }
         if (payload == 0)
         {
             return false;
-        }
-        if(get_head()->get_syn() || get_head()->get_fin()){
+        }else if(get_head()->opts_count > 0 && real_payload() == 0)
+        {
             return false;
         }
         return true;
@@ -347,25 +396,30 @@ struct ATPSocket{
     // peer's seq number acked by me
     uint32_t ack_nr = 0;
     bool overflow_lock = false;
+    bool new_stage_hitted = false;
     static const uint32_t seq_nr_mask = 0xffff;
     // when peer's seq_nr wrap to 0, peer_seq_nr_base += std::numeric_limits<T>::max()
     uint32_t peer_seq_nr_base = 0;
     // my seq number acked by peer
     uint32_t my_seq_acked_by_peer = 0;
 
+    // Re-send config
     uint32_t rtt = 0;
     uint32_t rtt_var = 800; // Default 800
     uint32_t rto = 2000; // Default 3000, recommend no less than timer event interval
+    uint32_t ack_delayed_time = 200; // default 200, set 0 to disable delayed ACK
+
+    // These are time point, don't modify
+    uint64_t delay_ack_timeout = 0; // at this exact time send delayed ACK
     uint64_t rto_timeout = 0; // at this exact time(ms) will this socket timeout
     uint64_t death_timeout = 0; // at this exact time change from TIME_WAIT to DESTROY
     uint64_t persist_timeout = 0; // at this exact time probe peer's window
-    uint32_t ack_delayed_time = 200; // default 200, set 0 to disable delayed ACK
-    uint64_t delay_ack_timeout = 0; // at this exact time send delayed ACK
 
     uint16_t atp_retries1 = 3; // TCP RFC recommends 3
     uint16_t atp_retries2 = 8; // TCP RFC recommends 15
     uint16_t atp_syn_retries1 = 5;
 
+    // Window
     // Not used yet
     uint32_t cur_window_packets = 1; 
     // the number of packets in the send queue
@@ -385,6 +439,9 @@ struct ATPSocket{
 
     atp_callback_func * callbacks[ATP_CALLBACK_SIZE];
 
+    // SACK
+    uint8_t peer_max_sack_count = 0;
+    uint8_t my_max_sack_count = 5;
 
     ~ATPSocket(){
         #if defined (ATP_LOG_AT_DEBUG)
@@ -417,7 +474,7 @@ struct ATPSocket{
     ATP_PROC_RESULT bind(const ATPAddrHandle & to_addr);
     // passive connect
     ATP_PROC_RESULT accept(const ATPAddrHandle & to_addr, OutgoingPacket * recv_pkt);
-    ATP_PROC_RESULT receive(OutgoingPacket * recv_pkt);
+    ATP_PROC_RESULT receive(OutgoingPacket * recv_pkt, size_t real_payload_offset);
     void reset_timer(){
 
     }
@@ -429,10 +486,10 @@ struct ATPSocket{
     ATP_PROC_RESULT close();
     bool writable() const;
     bool readable() const;
-    void add_selective_ack_option(OutgoingPacket * out_pkt);
+    void add_option(OutgoingPacket * out_pkt, uint8_t opt_kind, uint8_t opt_data_len, char * opt_data);
     void add_data(OutgoingPacket * out_pkt, const void * buf, const size_t len);
-    size_t bytes_can_send_once() const ;
-    size_t bytes_can_send_one_packet() const ;
+    size_t bytes_can_send_once() const;
+    size_t bytes_can_send_one_packet() const;
     bool is_full() const {return bytes_can_send_once() == 0;}
     // this function returns immediately after the packet is sent(whether succeed or fail)
     ATP_PROC_RESULT write(const void * buf, const size_t len);
@@ -442,11 +499,15 @@ struct ATPSocket{
     ATP_PROC_RESULT check_fin(OutgoingPacket * recv_pkt);
     // handles ACK, when a ack packet comes, update ack_nr
     ATP_PROC_RESULT update_myack(OutgoingPacket * recv_pkt);
+    // Used in restricted situations, such as SYN
+    ATP_PROC_RESULT handle_recv_packet_hard(OutgoingPacket * recv_pkt);
     ATP_PROC_RESULT handle_recv_packet(OutgoingPacket * recv_pkt, bool from_cache);
+    size_t handle_opt(OutgoingPacket * recv_pkt);
     ATP_PROC_RESULT process(const ATPAddrHandle & addr, const char * buffer, size_t len);
     ATP_PROC_RESULT invoke_callback(int callback_type, atp_callback_arguments * args);
     // update my_seq_acked_by_peer
     ATP_PROC_RESULT do_ack_packet(OutgoingPacket * recv_pkt);
+    ATP_PROC_RESULT do_selective_ack_packet(uint16_t * peer_ack_nrs, uint8_t count);
     // according to current base
     uint32_t get_full_seq_nr(uint32_t raw_peer_seq_nr){
         return raw_peer_seq_nr + peer_seq_nr_base;

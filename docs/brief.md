@@ -6,7 +6,7 @@ Rather than TCP, which is a flow-oriented protocol, ATP is based on sending and 
     IP Header
     UDP Header
     ATP Header
-    Data
+    Payload
 
 The ATP Header(10 bytes):
     
@@ -32,9 +32,9 @@ The flags are
     +        +  GKHTNN+
     +........+........+
     
-When opts is set not equal to 0, there are options at the beginning of user data.
+When opts is set not equal to 0, there are **opts** number of options at the beginning of payload.
 
-The option fields:
+The option fields are part of payload:
     
     0       7 8       f
     +........+........+
@@ -44,10 +44,10 @@ The option fields:
     +........+........+
 
 
-# Design of ATP Socket
+# Design
+ref [/docs/design.md](/docs/design.md)
 
 # API usages
-
 
 # Debug
 

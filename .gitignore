@@ -44,4 +44,5 @@ src/logs
 *.gcda
 *.gcno
 *.info
+logs/
 ATPLCovHTML/

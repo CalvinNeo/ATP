@@ -54,10 +54,10 @@ std::string tabber(const std::string & src, bool tail_crlf) {
     return ans;
 }
 
-void _log_doit1(ATPSocket * socket, char const * func_name, int level, char const * fmt, va_list va){
+void _log_doit1(ATPSocket * socket, char const * func_name, int line, int level, char const * fmt, va_list va){
     char new_fmt[1024];
-    std::snprintf(new_fmt, 1024, "[Socket %s] %s at func[%s] \n<syserr %d: %s>\n\t%s\n"
-        , socket->to_string(), CONN_STATE_STRS[socket->conn_state], func_name, errno, strerror(errno), fmt);
+    std::snprintf(new_fmt, 1024, "[Socket %s] %s at func[%s:%d] \n<syserr %d: %s>\n\t%s\n"
+        , socket->to_string(), CONN_STATE_STRS[socket->conn_state], func_name, line, errno, strerror(errno), fmt);
     char buf[4096];
     vsnprintf(buf, 4096, new_fmt, va);
     fflush(stdout);
@@ -74,9 +74,9 @@ void _log_doit1(ATPSocket * socket, char const * func_name, int level, char cons
     }
     fflush(stderr);
 }
-void _log_doit1(ATPContext * context, char const* func_name, int level, char const * fmt, va_list va){
+void _log_doit1(ATPContext * context, char const* func_name, int line, int level, char const * fmt, va_list va){
     char new_fmt[1024];
-    std::snprintf(new_fmt, 1024, "[Context] at func[%s] \n<syserr %d: %s>\n\t%s\n", func_name, errno, strerror(errno), fmt);
+    std::snprintf(new_fmt, 1024, "[Context] at func[%s:%d] \n<syserr %d: %s>\n\t%s\n", func_name, line, errno, strerror(errno), fmt);
     char buf[4096];
     vsnprintf(buf, 4096, new_fmt, va);
     fflush(stdout);
@@ -137,39 +137,39 @@ void log_note2(std::function<void(ATPContext *, char const *, va_list)> f, ATPCo
 void log_fatal1(ATPSocket * socket, char const *fmt, ...){
     va_list va;
     va_start(va, fmt);
-    _log_doit(socket, "", LOGLEVEL_FATAL, fmt, va);
+    _log_doit(socket, "", 0, LOGLEVEL_FATAL, fmt, va);
     va_end(va);
     exit(1);
 }
 void log_debug1(ATPSocket * socket, char const *fmt, ...){
     va_list va;
     va_start(va, fmt);
-    _log_doit(socket, "", LOGLEVEL_DEBUG, fmt, va);
+    _log_doit(socket, "", 0, LOGLEVEL_DEBUG, fmt, va);
     va_end(va);
 }
 void log_note1(ATPSocket * socket, char const *fmt, ...){
     va_list va;
     va_start(va, fmt);
-    _log_doit(socket, "", LOGLEVEL_NOTE, fmt, va);
+    _log_doit(socket, "", 0, LOGLEVEL_NOTE, fmt, va);
     va_end(va);
 }
 void log_fatal1(ATPContext * context, char const *fmt, ...){
     va_list va;
     va_start(va, fmt);
-    _log_doit(context, "", LOGLEVEL_FATAL, fmt, va);
+    _log_doit(context, "", 0, LOGLEVEL_FATAL, fmt, va);
     va_end(va);
     exit(1);
 }
 void log_debug1(ATPContext * context, char const *fmt, ...){
     va_list va;
     va_start(va, fmt);
-    _log_doit(context, "", LOGLEVEL_DEBUG, fmt, va);
+    _log_doit(context, "", 0, LOGLEVEL_DEBUG, fmt, va);
     va_end(va);
 }
 void log_note1(ATPContext * context, char const *fmt, ...){
     va_list va;
     va_start(va, fmt);
-    _log_doit(context, "", LOGLEVEL_NOTE, fmt, va);
+    _log_doit(context, "", 0, LOGLEVEL_NOTE, fmt, va);
     va_end(va);
 }
 

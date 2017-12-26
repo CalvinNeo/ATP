@@ -19,14 +19,14 @@ demos: demo demo_file demo_poll
 demo: recv send 
 demo_file: sendfile recvfile 
 demo_poll: send_poll recv
-demos_cov: CFLAGS_COV = -fprofile-arcs -ftest-coverage -DATP_LOG_AT_NOTE -DATP_LOG_AT_DEBUG -DATP_LOG_UDP -DATP_DEBUG_TEST_OVERFLOW
-demos_cov: CFLAGS_COV_LNK = -fprofile-arcs -ftest-coverage --coverage -DATP_LOG_AT_NOTE -DATP_LOG_AT_DEBUG -DATP_LOG_UDP -DATP_DEBUG_TEST_OVERFLOW
+demos_cov: CFLAGS_COV = -fprofile-arcs -ftest-coverage -fno-inline -DATP_LOG_AT_NOTE -DATP_LOG_AT_DEBUG -DATP_LOG_UDP -DATP_DEBUG_TEST_OVERFLOW
+demos_cov: CFLAGS_COV_LNK = -fprofile-arcs -ftest-coverage --coverage -fno-inline -DATP_LOG_AT_NOTE -DATP_LOG_AT_DEBUG -DATP_LOG_UDP -DATP_DEBUG_TEST_OVERFLOW
 demos_cov: demo_file
 #	for name in `ls -al . | awk '{print $$NF}'| grep '.gcno$$' `;do mv $$name $(BIN_ROOT)/;done
 #	for name in `ls -al . | awk '{print $$NF}'| grep '.gcda$$' `;do mv $$name $(BIN_ROOT)/;done
 
 run_test:
-	sudo python $(SRC_ROOT)/test/makedata.py
+	python $(SRC_ROOT)/test/makedata.py
 	python $(SRC_ROOT)/test/run_test.py
 	# ./bin/recvfile 2> r.log 1> r1.log & 
 	# ./bin/sendfile 2> s.log 1> s1.log &

@@ -191,11 +191,12 @@ ATP_PROC_RESULT atp_process_udp(atp_context * context, int sockfd, const char * 
     }
     if (socket == nullptr)
     {
-        return ATP_PROC_ERROR;
+        result = ATP_PROC_ERROR;
     }else{
         result = socket->process(handle_to, buf, len);
     }
-    return context->daily_routine();
+    result = context->daily_routine();
+    return result;
 }
 
 ATP_PROC_RESULT atp_close(atp_socket * socket){

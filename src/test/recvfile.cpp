@@ -19,6 +19,7 @@
 */
 #include "../atp.h"
 #include "../udp_util.h"
+#include "../scaffold.h"
 #include "test.h"
 #include <unistd.h>
 
@@ -33,8 +34,10 @@ ATP_PROC_RESULT data_arrived(atp_callback_arguments * args){
     return ATP_PROC_OK;
 }
 
+    atp_socket * socket2 ;
 static void sigterm_handler(int signum)
 {
+    puts("Timeout Term.");
     exit(0);
 }
 
@@ -55,12 +58,16 @@ void reg_sigterm_handler(void (*handler)(int s))
 int main(int argc, char* argv[], char* env[]){
     int oc;
     bool simulate_loss = false;
-    while((oc = getopt(argc, argv, "l")) != -1)
+    uint16_t serv_port = 9876;
+    while((oc = getopt(argc, argv, "lp:")) != -1)
     {
         switch(oc)
         {
         case 'l':
             simulate_loss = true;
+            break;
+        case 'p':
+            scanf(optarg, "%u", &serv_port);
             break;
         }
     }
@@ -68,7 +75,6 @@ int main(int argc, char* argv[], char* env[]){
     reg_sigterm_handler(sigterm_handler);
     fout = fopen("out.dat", "wb");
 
-    uint16_t serv_port = 9876;
     struct sockaddr_in cli_addr; socklen_t cli_len = sizeof(cli_addr);
     struct sockaddr_in srv_addr;
 
@@ -77,6 +83,7 @@ int main(int argc, char* argv[], char* env[]){
 
     atp_context * context = atp_create_context();
     atp_socket * socket = atp_create_socket(context);
+    socket2 = socket;
     int sockfd = atp_getfd(socket);
     atp_set_callback(socket, ATP_CALL_ON_RECV, data_arrived);
     if(simulate_loss){

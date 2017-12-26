@@ -25,17 +25,20 @@
 int main(int argc, char* argv[], char* env[]){
     int oc;
     bool simulate_loss = false;
-    while((oc = getopt(argc, argv, "l")) != -1)
+    uint16_t serv_port = 9876;
+    while((oc = getopt(argc, argv, "lp:")) != -1)
     {
         switch(oc)
         {
         case 'l':
             simulate_loss = true;
             break;
+        case 'p':
+            scanf(optarg, "%u", &serv_port);
+            break;
         }
     }
 
-    uint16_t serv_port = 9876;
     struct sockaddr_in cli_addr; 
     struct sockaddr_in srv_addr; socklen_t srv_len = sizeof(srv_addr);
 
