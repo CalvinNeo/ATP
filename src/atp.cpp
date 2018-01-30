@@ -235,13 +235,14 @@ ATP_PROC_RESULT atp_eof(atp_socket * socket){
     return !socket->readable();
 }
 
-ATP_PROC_RESULT atp_send_status(atp_socket * socket){
+ATP_PROC_RESULT atp_sending_status(atp_socket * socket){
     if(socket->outbuf.size() == 0){
         return ATP_PROC_OK;
     }else{
         return ATP_PROC_WAIT;
     }
 }
+
 ATP_PROC_RESULT atp_timer_event(atp_context * context, uint64_t interval){
     if(context == nullptr) return ATP_PROC_ERROR;
     ATP_PROC_RESULT result = context->daily_routine();
@@ -251,4 +252,23 @@ ATP_PROC_RESULT atp_timer_event(atp_context * context, uint64_t interval){
 bool atp_destroyed(atp_socket * socket){
     if(socket == nullptr) return ATP_PROC_ERROR;
     return socket == nullptr ? true : socket->conn_state == CS_DESTROY;
+}
+
+void atp_set_long(atp_socket * socket, size_t option, size_t value){
+    switch(option){
+    case ATP_API_SACKOPT:
+        break;
+    case ATP_API_SOCKID:
+        socket->sock_id = value;
+        break;
+    }
+}
+
+size_t atp_get_long(atp_socket * socket, size_t option){
+    switch(option){
+    case ATP_API_SACKOPT:
+        return socket->my_max_sack_count;
+    case ATP_API_SOCKID:
+        return socket->sock_id;
+    }
 }

@@ -34,7 +34,6 @@ ATP_PROC_RESULT data_arrived(atp_callback_arguments * args){
     return ATP_PROC_OK;
 }
 
-    atp_socket * socket2 ;
 static void sigterm_handler(int signum)
 {
     puts("Timeout Term.");
@@ -54,12 +53,13 @@ void reg_sigterm_handler(void (*handler)(int s))
         sigaction(SIGTERM, &action, NULL);
     }
 }
-
 int main(int argc, char* argv[], char* env[]){
     int oc;
     bool simulate_loss = false;
     uint16_t serv_port = 9876;
-    while((oc = getopt(argc, argv, "lp:")) != -1)
+    char output_file_name[255] = "out.dat";
+    uint16_t sock_id = 0;
+    while((oc = getopt(argc, argv, "o:lp:s:")) != -1)
     {
         switch(oc)
         {
@@ -67,13 +67,18 @@ int main(int argc, char* argv[], char* env[]){
             simulate_loss = true;
             break;
         case 'p':
-            scanf(optarg, "%u", &serv_port);
+            sscanf(optarg, "%u", &serv_port);
+            break;
+        case 'o':
+            strcpy(output_file_name, optarg);
+            break;
+        case 's':
+            sscanf(optarg, "%u", &sock_id);
             break;
         }
     }
-
     reg_sigterm_handler(sigterm_handler);
-    fout = fopen("out.dat", "wb");
+    fout = fopen(output_file_name, "wb");
 
     struct sockaddr_in cli_addr; socklen_t cli_len = sizeof(cli_addr);
     struct sockaddr_in srv_addr;
@@ -83,7 +88,7 @@ int main(int argc, char* argv[], char* env[]){
 
     atp_context * context = atp_create_context();
     atp_socket * socket = atp_create_socket(context);
-    socket2 = socket;
+    if(sock_id != 0){atp_set_long(socket, ATP_API_SOCKID, sock_id); }
     int sockfd = atp_getfd(socket);
     atp_set_callback(socket, ATP_CALL_ON_RECV, data_arrived);
     if(simulate_loss){

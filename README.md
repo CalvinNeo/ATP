@@ -1,6 +1,6 @@
 # ATP
 
-ATP is a naive TCP implementation based on UDP
+ATP is a simple reliable transport protocol implementation based on packets.
 
 [![Build Status](https://travis-ci.org/CalvinNeo/ATP.svg?branch=master)](https://travis-ci.org/CalvinNeo/ATP)  [![Coverage Status](https://coveralls.io/repos/github/CalvinNeo/ATP/badge.svg?branch=master)](https://coveralls.io/github/CalvinNeo/ATP?branch=master)
 

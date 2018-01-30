@@ -20,6 +20,8 @@
 #include "atp_impl.h"
 #include "udp_util.h"
 #include <algorithm>
+#include <bitset>
+#include <iostream>
 
 ATPSocket::ATPSocket(ATPContext * _context) : context(_context){
     assert(context != nullptr);
@@ -58,6 +60,7 @@ atp_callback_arguments ATPSocket::make_atp_callback_arguments(int method, Outgoi
 }
 
 OutgoingPacket * ATPSocket::basic_send_packet(uint16_t flags){
+    // use `{{}}` to make C++14 happy
     ATPPacket pkt = ATPPacket{
         (seq_nr & seq_nr_mask), // seq_nr, updated in send_packet
         (ack_nr & seq_nr_mask), // ack_nr
@@ -71,10 +74,11 @@ OutgoingPacket * ATPSocket::basic_send_packet(uint16_t flags){
         false, // marked
         false, // selective_acked
         sizeof (ATPPacket), // length, update by `add_data`
-        0, // payload, update by `add_data`
-        0, // timestamp, set at `send_packet`
-        0, // transmissions, update by `send_packet`
-        false, // need_resend, update by `send_packet`
+        0, // payload, update by `add_data`/`add_option`
+        0, // option_len, update by `add_option`
+        0, // timestamp, set at `send_packet_noguard`
+        0, // transmissions, update by `send_packet_noguard`
+        false, // need_resend, update by `send_packet`/`check_unsend_packet`
         seq_nr, // full_seq_nr, updated in send_packet
         reinterpret_cast<char *>(std::calloc(1, sizeof (ATPPacket))) // SYN packet will not contain data
     };
@@ -134,6 +138,9 @@ ATP_PROC_RESULT ATPSocket::connect(const ATPAddrHandle & to_addr){
         log_debug(this, "UDP socket connect to %s.", dest_addr.to_string());
     #endif
     if (result == ATP_PROC_ERROR){
+        #if defined (ATP_LOG_AT_DEBUG)
+            log_debug(this, "Connect Failed.");
+        #endif
         delete out_pkt;
         out_pkt = nullptr;
     } else{
@@ -507,6 +514,7 @@ void ATPSocket::add_option(OutgoingPacket * out_pkt, uint8_t opt_kind, uint8_t o
     memcpy(out_pkt->data + out_pkt->length + sizeof(uint8_t) * 2, opt_data, opt_data_len);
     out_pkt->length += total_opt_len;
     out_pkt->payload += total_opt_len;
+    out_pkt->option_len += total_opt_len;
     assert(out_pkt->length == out_pkt->payload + sizeof(ATPPacket));
     #if defined (ATP_LOG_AT_DEBUG)
         // fprintf(stderr, "Add option[%u], kind:%u, data_len:%u, payload:%u\n", out_pkt->get_head()->opts_count
@@ -839,7 +847,7 @@ ATP_PROC_RESULT ATPSocket::update_myack(OutgoingPacket * recv_pkt){
         // it's seq_nr maybe repeated
         action = ATP_PROC_OK;
         #if defined (ATP_LOG_AT_DEBUG)
-            log_debug(this, "This is a empty packet with repeated raw_seq_nr:%u, seq_nr:%u, ack_nr:%u, my ack is:%u."
+            log_debug(this, "This is a empty packet with repeated raw_seq_nr:%u, seq_nr:%u, ack_nr:%u, my ack_nr is:%u."
                 , raw_peer_seq, peer_seq, recv_pkt->get_head()->ack_nr, ack_nr);
         #endif
         // WHY DO NOT UPDATE ACK:
@@ -989,9 +997,8 @@ size_t ATPSocket::handle_opt(OutgoingPacket * recv_pkt){
             }
             case ATP_OPT_SACK:
             {
-                if(peer_max_sack_count > 0){
-                    uint8_t count = len / sizeof(uint16_t);
-                    do_selective_ack_packet(reinterpret_cast<uint16_t *>(opt_dat_p), count);
+                if(my_max_sack_count > 0){
+                    do_selective_ack_packet(opt_dat_p, len);
                 }
                 break;
             }
@@ -1025,55 +1032,91 @@ ATP_PROC_RESULT ATPSocket::handle_recv_packet(OutgoingPacket * recv_pkt, bool fr
     {
         // selective ACK peer's paket
         OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
-        size_t size = std::min(static_cast<size_t>(peer_max_sack_count), inbuf.size());
-        uint16_t * sack_seq_nrs = new uint16_t(size);
-        uint8_t sack_seq_count = 0;
-        // FInd all packets
-        for(OutgoingPacket * cached_pkt : inbuf){
-            if (guess_full_seq_nr(cached_pkt->get_head()->seq_nr) > ack_nr)
-            {
-                sack_seq_nrs[sack_seq_count] = cached_pkt->get_head()->seq_nr;
-                sack_seq_count++;
-            }
-            if (sack_seq_count == size)
-            {
-                break;
-            }
+
+        // Find all packets
+        #ifdef USE_OLD_SACK_FIELD
+            size_t size = std::min(static_cast<size_t>(peer_max_sack_count), inbuf.size());
+            uint16_t * sack_data = new uint16_t[size] ();
+            uint8_t sack_seq_count = 0;
+            size_t loop_end = size;
+        #else
+            // bit-wise size
+            size_t size = std::min(static_cast<size_t>(peer_max_sack_count) * 8, inbuf.size());
+            // byte-wise size
+            size_t byte_size = size % 8 == 0 ? (size / 8): (size / 8 + 1);
+            uint8_t * sack_data = new uint8_t[byte_size] ();
+            uint8_t sack_seq_count = 0;
+            size_t loop_end = inbuf.size();
+        #endif
+        for(auto i = 0; i < loop_end; i++){
+            OutgoingPacket * cached_pkt = inbuf[i];
+            uint32_t cached_seq = guess_full_seq_nr(cached_pkt->get_head()->seq_nr);
+            #ifdef USE_OLD_SACK_FIELD
+                if (cached_seq > ack_nr)
+                {
+                    sack_data[sack_seq_count] = cached_pkt->get_head()->seq_nr;
+                    sack_seq_count++;
+                }
+                // Only put in `size` seq_nrs
+                if (sack_seq_count == size) break;
+            #else
+                if (cached_seq > ack_nr)
+                {
+                    uint32_t offset = cached_seq - (ack_nr + 1);
+                    if(offset >= size) {continue;}
+                    uint32_t byte_offset = offset / 8;
+                    uint32_t bit_offset = offset % 8;
+                    sack_data[byte_offset] |= (1 << bit_offset);
+                    sack_seq_count++;
+                }
+            #endif
         }
         if (sack_seq_count > 0)
         {
-            // If there are some packets to ACK
+            // If there are some packets to SACK
             #if defined (ATP_LOG_AT_DEBUG)
-                fprintf(stdout, "SND-SACK[%u] ", sack_seq_count);
-                fprintf(stderr, "SND-SACK[%u] ", sack_seq_count);
-                for(uint8_t i = 0; i < sack_seq_count; i++){
-                    fprintf(stderr, "%u(%u)", sack_seq_nrs[i], guess_full_seq_nr(sack_seq_nrs[i]));
-                    fprintf(stdout, "%u(%u)", sack_seq_nrs[i], guess_full_seq_nr(sack_seq_nrs[i]));
-                }
+                fprintf(stdout, "snd-sack[%u] ", sack_seq_count);
+                fprintf(stderr, "snd-sack[%u] ", sack_seq_count);
+                #ifdef USE_OLD_SACK_FIELD
+                    for(uint8_t i = 0; i < sack_seq_count; i++){
+                        fprintf(stderr, "%u(%u)", sack_data[i], guess_full_seq_nr(sack_data[i]));
+                        fprintf(stdout, "%u(%u)", sack_data[i], guess_full_seq_nr(sack_data[i]));
+                    }
+                #else
+                    for(uint8_t i = 0; i < byte_size; i++){
+                        std::bitset<8> bs = sack_data[i];
+                        std::cout << bs << " ";
+                        std::cerr << bs << " ";
+                    }
+                #endif
                 fprintf(stdout, "\n");
                 fprintf(stderr, "\n");
             #endif
-            add_option(out_pkt, ATP_OPT_SACK, static_cast<uint8_t>(sack_seq_count * sizeof(uint16_t))
-                , reinterpret_cast<char*>(sack_seq_nrs));
-            delete sack_seq_nrs;
-            sack_seq_nrs = nullptr;
+            #ifdef USE_OLD_SACK_FIELD
+                add_option(out_pkt, ATP_OPT_SACK, static_cast<uint8_t>(sack_seq_count * sizeof(uint16_t))
+                    , reinterpret_cast<char*>(sack_data));
+            #else
+                add_option(out_pkt, ATP_OPT_SACK, static_cast<uint8_t>(byte_size)
+                    , reinterpret_cast<char*>(sack_data));
+            #endif
+            // add_option `memcpy` sack_data
+            delete sack_data;
+            sack_data = nullptr;
             send_packet(out_pkt);
         }else{
-            // If there's not
-            #if defined (ATP_LOG_AT_DEBUG)
-                fprintf(stdout, "EMPTY-SACK\n");
-                fprintf(stderr, "EMPTY-SACK\n");
-            #endif
-            // TODO FIXME Seems that sending repeated ACK with the following statement
+            // If there's no packets to SACK
+            // Once appears that sending repeated ACK with the following statement will stop the program from proceeding
+            // It seems to be caused by `subprocess.PIPE` deadlock when I switched stdout/stderr to file, it worked again
             #ifdef _ATP_TEST_STOP
+                #if defined (ATP_LOG_AT_DEBUG)
+                    fprintf(stdout, "empty-sack\n");
+                    fprintf(stderr, "empty-sack\n");
+                #endif
                 send_packet(out_pkt);
             #else
                 delete out_pkt;
                 out_pkt = nullptr;
             #endif
-            // will stop the program from proceeding
-            // It seems to be caused by `subprocess.PIPE` deadlock, 
-            // when I switched stdout/stderr to file, it worked again
         }
     }
 
@@ -1082,9 +1125,9 @@ ATP_PROC_RESULT ATPSocket::handle_recv_packet(OutgoingPacket * recv_pkt, bool fr
         #if defined (ATP_LOG_AT_DEBUG)
             if (from_cache)
             {   
-                log_debug(this, "Drop packet from cache, my ack:%u, peer_seq:%u.", ack_nr, peer_seq);
+                log_debug(this, "Drop packet from cache, my ack_nr:%u, peer_seq:%u.", ack_nr, peer_seq);
             }else{
-                log_debug(this, "Drop packet, my ack:%u, peer_seq:%u.", ack_nr, peer_seq);
+                log_debug(this, "Drop packet, my ack_nr:%u, peer_seq:%u.", ack_nr, peer_seq);
             }
         #endif
         #if defined (ATP_LOG_AT_NOTE)
@@ -1121,7 +1164,7 @@ ATP_PROC_RESULT ATPSocket::handle_recv_packet(OutgoingPacket * recv_pkt, bool fr
                 fprintf(stderr, "\n");
             #endif
             std::copy(inbuf_cache2.begin(), inbuf_cache2.end(), std::back_inserter(inbuf));
-            std::make_heap(inbuf.begin(), inbuf.end());
+            std::make_heap(inbuf.begin(), inbuf.end(), _cmp_outgoingpacket());
             inbuf_cache2.clear();
             #if defined (ATP_LOG_AT_DEBUG)
                 log_debug(this, "Handled all packets before overflow, inbuf size: %u.", inbuf.size());
@@ -1137,9 +1180,9 @@ ATP_PROC_RESULT ATPSocket::handle_recv_packet(OutgoingPacket * recv_pkt, bool fr
         }
         #if defined (ATP_LOG_AT_DEBUG)
             if(from_cache){
-                log_debug(this, "Process a cached ATPPacket, peer_seq:%u, my ack:%u.", peer_seq, ack_nr);
+                log_debug(this, "Process a cached ATPPacket, peer_seq:%u, my ack_nr:%u.", peer_seq, ack_nr);
             }else{
-                log_debug(this, "Process a ATPPacket, peer_seq:%u, my ack:%u.", peer_seq, ack_nr);
+                log_debug(this, "Process a ATPPacket, peer_seq:%u, my ack_nr:%u.", peer_seq, ack_nr);
             }
         #endif
         #if defined (ATP_LOG_AT_NOTE)
@@ -1227,10 +1270,11 @@ ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buff
     // must copy received message from "kernel"
     recv_pkt->data = reinterpret_cast<char *>(std::calloc(1, len));
     std::memcpy(recv_pkt->data, buffer, len);
-    recv_pkt->timestamp = get_current_ms();
     ATPPacket * pkt = recv_pkt->get_head();
     recv_pkt->length = len;
     recv_pkt->payload = recv_pkt->length - sizeof(ATPPacket);
+    recv_pkt->update_real_payload();
+    recv_pkt->timestamp = get_current_ms();
 
     ATP_PROC_RESULT result = ATP_PROC_OK;
     uint32_t old_ack_nr = ack_nr;
@@ -1416,46 +1460,75 @@ uint32_t ATPSocket::guess_full_ack_nr(uint32_t raw_peer_ack){
     return calculated_peer_ack;
 }
 
-ATP_PROC_RESULT ATPSocket::do_selective_ack_packet(uint16_t * peer_ack_nrs, uint8_t count){
-    // TODO rewrite to improve performance
+ATP_PROC_RESULT ATPSocket::do_selective_ack_packet(char * peer_sack_data, uint8_t peer_sack_data_size){
+    // `peer_sack_data` is directly from ATPPacket SACK option field
+    // SACK infomation are generated by function `handle_recv_packet` of peer.
     #if defined (ATP_LOG_AT_DEBUG)
-        fprintf(stdout, "RCV-SACK[%u] ", count);
-        fprintf(stderr, "RCV-SACK[%u] ", count);
+        fprintf(stdout, "rcv-sack[%u] ", peer_sack_data_size);
+        fprintf(stderr, "rcv-sack[%u] ", peer_sack_data_size);
     #endif
+    #ifdef USE_OLD_SACK_FIELD
+    uint16_t * peer_sack_seq_nrs = reinterpret_cast<uint16_t *>(peer_sack_data);
+    uint8_t count = peer_sack_data_size / sizeof(uint16_t);
     for(uint8_t i = 0; i < count; i++){
-        uint16_t ack = peer_ack_nrs[i];
+        uint16_t ack = peer_sack_seq_nrs[i];
+    #else
+    size_t count = peer_sack_data_size * 8;
+    uint8_t * peer_sack_seq_bits = reinterpret_cast<uint8_t *>(peer_sack_data);
+    for(size_t i = 0; i < count; i++){
+        size_t byte_offset = i / 8;
+        size_t bit_offset = i % 8;
+        bool bit_data = peer_sack_seq_bits[byte_offset] & (1 << bit_offset);
+        if(!bit_data) continue; // don't need to be sacked because this bit is `0`
+        size_t ack = i;
+    #endif
+        // TODO performance can possibly be improved
         auto pkt_iter = std::find_if(outbuf.begin(), outbuf.end(), 
             [=](OutgoingPacket * op){
                 return op->get_head()->seq_nr == ack;
             }
         );
+        #if defined (ATP_LOG_AT_DEBUG)
+            char op_sgn = ' ';
+        #endif
+        OutgoingPacket * cur_pkt = *pkt_iter;
         if (pkt_iter != outbuf.end())
         {
+            assert(cur_pkt != nullptr);
             // do not update rto, because already updated in previous called `do_ack_packet`
-            (*pkt_iter)->marked = true;
-            if ((*pkt_iter)->selective_acked)
-            {            
+            cur_pkt->marked = true;
+            if (cur_pkt->selective_acked)
+            {
+                // This packet is already ACKed by SACK, don't need to handle repeatedly
                 #if defined (ATP_LOG_AT_DEBUG)
-                    fprintf(stdout, "[R]%u(%u) ", (*pkt_iter)->full_seq_nr, (*pkt_iter)->get_head()->seq_nr);
-                    fprintf(stderr, "[R]%u(%u) ", (*pkt_iter)->full_seq_nr, (*pkt_iter)->get_head()->seq_nr);
+                    op_sgn = 'R';
                 #endif
             }else{
-                if((*pkt_iter)->transmissions > 0 && (*pkt_iter)->is_promised_packet()){
+                if(cur_pkt->transmissions > 0 && cur_pkt->is_promised_packet()){
                     // This is very important, ref `do_ack_packet`
-                    assert(used_window >= (*pkt_iter)->payload);
+                    #if defined (ATP_LOG_AT_DEBUG)
+                        size_t pl = cur_pkt->payload;
+                        assert(used_window >= pl);
+                    #endif
                     used_window_packets --;
-                    used_window -= (*pkt_iter)->payload;
+                    used_window -= cur_pkt->payload;
                 }
                 #if defined (ATP_LOG_AT_DEBUG)
-                    fprintf(stdout, "[O]%u(%u) ", (*pkt_iter)->full_seq_nr, (*pkt_iter)->get_head()->seq_nr);
-                    fprintf(stderr, "[O]%u(%u) ", (*pkt_iter)->full_seq_nr, (*pkt_iter)->get_head()->seq_nr);
+                    op_sgn = 'Y';
                 #endif
             }
             (*pkt_iter)->selective_acked = true;
+            #if defined (ATP_LOG_AT_DEBUG)
+                fprintf(stdout, "[%c]%u(%u) ", op_sgn, cur_pkt->full_seq_nr, ack);
+                fprintf(stderr, "[%c]%u(%u) ", op_sgn, cur_pkt->full_seq_nr, ack);
+            #endif
         }else{
             #if defined (ATP_LOG_AT_DEBUG)
-                fprintf(stdout, "[X]%u(%u) ", (*pkt_iter)->full_seq_nr, (*pkt_iter)->get_head()->seq_nr);
-                fprintf(stderr, "[X]%u(%u) ", (*pkt_iter)->full_seq_nr, (*pkt_iter)->get_head()->seq_nr);
+                op_sgn = 'N';
+            #endif
+            #if defined (ATP_LOG_AT_DEBUG)
+                fprintf(stdout, "[%c](%u) ", op_sgn, ack);
+                fprintf(stderr, "[%c(%u) ", op_sgn, ack);
             #endif
         }
     }
@@ -1465,12 +1538,15 @@ ATP_PROC_RESULT ATPSocket::do_selective_ack_packet(uint16_t * peer_ack_nrs, uint
     #endif
     std::make_heap(outbuf.begin(), outbuf.end(), _cmp_outgoingpacket_marked());
     #if defined (ATP_LOG_AT_DEBUG)
-        fprintf(stdout, "DEL: ");
+        fprintf(stdout, "del: ");
         for(int i = 0; i < outbuf.size(); i++){
-            fprintf(stdout, "[%s]%u(%u)", (outbuf[i]->marked? "O": "X"), outbuf[i]->full_seq_nr, outbuf[i]->get_head()->seq_nr);
+            fprintf(stdout, "[%s]%u(%u)", (outbuf[i]->marked? "Y": "N"), outbuf[i]->full_seq_nr, outbuf[i]->get_head()->seq_nr);
         }
         fprintf(stdout, "\n");
     #endif
+    // Remove all acked packets from `outbuf`
+    // Notice that there's no "Reneging" problems, once a packet is SACKed by peer, 
+    // Peer promises to eventually process that packet and never discard that.
     while(!outbuf.empty()){
         if (outbuf.back()->marked)
         {
@@ -1488,9 +1564,23 @@ ATP_PROC_RESULT ATPSocket::do_ack_packet(OutgoingPacket * recv_pkt){
     // ack n means ack [0..n]
     uint32_t raw_peer_ack = recv_pkt->get_head()->ack_nr;
     uint32_t calculated_peer_ack = guess_full_ack_nr(raw_peer_ack);
-    // update my_seq_acked_by_peer
-    my_seq_acked_by_peer = std::max(calculated_peer_ack, my_seq_acked_by_peer);
-    // delete successfully sent packets
+    if (calculated_peer_ack > my_seq_acked_by_peer)
+    {
+        // update my_seq_acked_by_peer
+        my_seq_acked_by_peer = calculated_peer_ack;
+        if (atp_frr_retries != 0){
+            frr_counter = 0;
+        }
+    }else if (calculated_peer_ack == my_seq_acked_by_peer){
+        if (atp_frr_retries != 0){
+            if(atp_frr_retries == frr_counter){
+
+            } else{
+                frr_counter++;
+            }
+        }
+    }
+    // remove successfully sent packets from out buffer
     while(!outbuf.empty()){
         OutgoingPacket * out_pkt = outbuf[0]; 
         ATPPacket * pkt = out_pkt->get_head();
@@ -1516,7 +1606,9 @@ ATP_PROC_RESULT ATPSocket::do_ack_packet(OutgoingPacket * recv_pkt){
                     // If a packet is not is_promised_packet, it will never be ACKed by peer.
                     // In fact we don't count a **pure** ACK with options into window.
                     // However if there is user data, then the option field will be counted as window size.
-                    assert(used_window >= out_pkt->payload);
+                    #if defined (ATP_LOG_AT_DEBUG)
+                        assert(used_window >= out_pkt->payload);
+                    #endif
                     used_window_packets --;
                     used_window -= out_pkt->payload;
                 }
@@ -1566,7 +1658,7 @@ ATP_PROC_RESULT ATPSocket::check_timeout(){
         // check persist timeout
         if (persist_timeout != 0 && (int64_t)(current_ms - persist_timeout) > 0)
         {
-
+            // probing whether peer's window is still zero
         }
         // check resend timeout
         if (rto_timeout != 0 && (int64_t)(current_ms - rto_timeout) > 0)

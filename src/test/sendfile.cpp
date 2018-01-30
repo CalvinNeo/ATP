@@ -26,7 +26,9 @@ int main(int argc, char* argv[], char* env[]){
     int oc;
     bool simulate_loss = false;
     uint16_t serv_port = 9876;
-    while((oc = getopt(argc, argv, "lp:")) != -1)
+    char input_file_name[255] = "in.dat";
+    uint16_t sock_id = 0;
+    while((oc = getopt(argc, argv, "i:lp:s:")) != -1)
     {
         switch(oc)
         {
@@ -34,11 +36,16 @@ int main(int argc, char* argv[], char* env[]){
             simulate_loss = true;
             break;
         case 'p':
-            scanf(optarg, "%u", &serv_port);
+            sscanf(optarg, "%u", &serv_port);
+            break;
+        case 'i':
+            strcpy(input_file_name, optarg);
+            break;
+        case 's':
+            sscanf(optarg, "%u", &sock_id);
             break;
         }
     }
-
     struct sockaddr_in cli_addr; 
     struct sockaddr_in srv_addr; socklen_t srv_len = sizeof(srv_addr);
 
@@ -48,6 +55,7 @@ int main(int argc, char* argv[], char* env[]){
 
     atp_context * context = atp_create_context();
     atp_socket * socket = atp_create_socket(context);
+    if(sock_id != 0){atp_set_long(socket, ATP_API_SOCKID, sock_id); }
     int sockfd = atp_getfd(socket);
     if(simulate_loss){
         atp_set_callback(socket, ATP_CALL_SENDTO, simulate_packet_loss_sendto);
@@ -65,7 +73,7 @@ int main(int argc, char* argv[], char* env[]){
         return 0;
     }
 
-    FILE * fin = fopen("in.dat", "rb");
+    FILE * fin = fopen(input_file_name, "rb");
     while (true) {
         sockaddr * psock_addr = (SA *)&srv_addr;
         if ((n = recvfrom(sockfd, msg, ATP_MAX_READ_BUFFER_SIZE, 0, psock_addr, &srv_len)) >= 0){
@@ -90,7 +98,7 @@ int main(int argc, char* argv[], char* env[]){
                 atp_write(socket, textmsg, nn);
             }
         }else{
-            if (atp_send_status(socket) == ATP_PROC_OK)
+            if (atp_sending_status(socket) == ATP_PROC_OK)
             {
                 // all packets are ACKed
                 puts("Trans Finished");

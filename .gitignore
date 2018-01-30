@@ -35,6 +35,8 @@
 *.tags*
 *.dat
 *.out
+in.*
+out.*
 
 bin/
 udp_test/

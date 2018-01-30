@@ -26,7 +26,34 @@
 #include <chrono>
 #include <map>
 #include <cstdarg>
-#include <iostream>
+#include <functional>
+
+template<typename T>
+struct TPool{
+    T * fetch(){
+        if(backed.empty()){
+            return gen();
+        }else{
+            return backed.back();
+            backed.pop_back();
+        }
+    }
+    void release(T * x){
+        backed.push_back(x);
+    }
+    TPool(std::function<T*()> generator) : gen(generator){
+
+    }
+    ~TPool(){
+        for(T * x : backed){
+            delete x;
+            x = nullptr;
+        }
+    }
+protected:
+    std::vector<T *> backed;
+    std::function<T*()> gen;
+};
 
 inline uint64_t get_current_ms(){
     using namespace std::chrono;

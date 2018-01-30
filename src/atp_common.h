@@ -84,6 +84,7 @@ enum {
 typedef struct ATPSocket atp_socket;
 typedef struct ATPContext atp_context;
 typedef int ATP_PROC_RESULT;
+typedef ATP_PROC_RESULT atp_result;
 
 enum ATP_CALLBACKTYPE_ENUM{
     ATP_CALL_ON_ERROR = 0,
@@ -122,7 +123,7 @@ struct atp_callback_arguments {
     };
 };
 
-typedef ATP_PROC_RESULT atp_callback_func(atp_callback_arguments *);
+typedef atp_result atp_callback_func(atp_callback_arguments *);
 
 struct atp_iovec {
     void * iov_base;

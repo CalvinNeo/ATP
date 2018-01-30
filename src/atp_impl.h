@@ -36,9 +36,13 @@
 #define LOGLEVEL_FATAL 1
 #define LOGLEVEL_NOTE 2
 #define LOGLEVEL_DEBUG 3
+// define thiws macro to enable basic logging
 #define ATP_LOG_AT_NOTE
+// define this macro to enable detailed logging message
 // #define ATP_LOG_AT_DEBUG
+// define this macro to show debuging message at UDP level
 // #define ATP_LOG_UDP
+// define this macro to force a seq_nr overflowing situation
 // #define ATP_DEBUG_TEST_OVERFLOW
 
 #define _log_doit _log_doit1
@@ -93,15 +97,15 @@ void log_note2(std::function<void(ATPContext *, char const *, va_list)> f, ATPCo
 
 #define SA struct sockaddr
 
-#define PACKETFLAG_FIN 0x1
-#define PACKETFLAG_SYN 0x2
-#define PACKETFLAG_RST 0x4
-#define PACKETFLAG_PSH 0x8
-#define PACKETFLAG_ACK 0x10
-#define PACKETFLAG_URG 0x20
+#define PACKETFLAG_FIN 0b00000001
+#define PACKETFLAG_SYN 0b00000010
+#define PACKETFLAG_RST 0b00000100
+#define PACKETFLAG_PSH 0b00001000
+#define PACKETFLAG_ACK 0b00010000
+#define PACKETFLAG_URG 0b00100000
 #define PACKETFLAG_MASK 0xff
 
-enum{
+enum ATP_OPTION_TYPE{
     ATP_OPT_SOCKID = 0,
     ATP_OPT_MSS,
     ATP_OPT_SACK,
@@ -111,9 +115,8 @@ enum{
 struct PACKED_ATTRIBUTE ATPPacket : public CATPPacket{
     // apt packet layout, trivial
 
-#define MAKE_FLAGS_GETTER_SETTER(fn, mn) void set_##fn(uint8_t fn){ \
-        if(fn == 1) flags |= mn; else flags &= (~mn); \
-        flags &= PACKETFLAG_MASK; } \
+#define MAKE_FLAGS_GETTER_SETTER(fn, mn) void set_##fn(uint8_t v){ \
+        if(v) flags |= mn; else flags &= (~mn); flags &= PACKETFLAG_MASK; } \
     uint8_t get_##fn() const{ return (flags & mn) == 0 ? 0 : 1;} 
 
     MAKE_FLAGS_GETTER_SETTER(fin, PACKETFLAG_FIN);
@@ -125,9 +128,7 @@ struct PACKED_ATTRIBUTE ATPPacket : public CATPPacket{
 
     template <typename ... Args>
     static uint16_t create_flags(Args&& ... args){
-        uint16_t f = 0;
-        f = ( ... | args);
-        f &= PACKETFLAG_MASK;
+        uint16_t f = ( ... | args) & PACKETFLAG_MASK;
         return f;
     }
 
@@ -253,11 +254,13 @@ struct OutgoingPacket{
             destroy();
     }
 
-    bool holder = true;
-    bool marked = false;
-    bool selective_acked = false;
+    // bool holder = true;
+    // bool marked = false;
+    // bool selective_acked = false;
+    uint8_t holder:1, marked:1, selective_acked:1;
     size_t length = 0; // length of the whole
     size_t payload = 0;
+    size_t option_len = 0;
     uint64_t timestamp; // microseconds
     uint32_t transmissions = 0; // total number of transmissions
     bool need_resend;
@@ -282,9 +285,9 @@ struct OutgoingPacket{
         }
         return nullptr;
     }
-    size_t real_payload() const{
-        // payload without options
-        size_t option_len = 0;
+
+    void update_real_payload(){
+        option_len = 0;
         char * p = data + sizeof(ATPPacket);
         for(uint8_t i = 0; i < get_head()->opts_count; i++){
             uint8_t l = *reinterpret_cast<uint8_t*>(p + sizeof(uint8_t));
@@ -294,6 +297,11 @@ struct OutgoingPacket{
             p += l;
         }
         assert(payload >= option_len);
+        return payload - option_len;
+    }
+
+    size_t real_payload() const{
+        // payload without options
         return payload - option_len;
     }
 
@@ -415,18 +423,24 @@ struct ATPSocket{
     uint64_t death_timeout = 0; // at this exact time change from TIME_WAIT to DESTROY
     uint64_t persist_timeout = 0; // at this exact time probe peer's window
 
-    uint16_t atp_retries1 = 3; // TCP RFC recommends 3
-    uint16_t atp_retries2 = 8; // TCP RFC recommends 15
-    uint16_t atp_syn_retries1 = 5;
+    uint8_t atp_retries1 = 3; // TCP RFC recommends 3
+    uint8_t atp_retries2 = 8; // TCP RFC recommends 15
+    uint8_t atp_syn_retries1 = 5;
+    uint8_t atp_frr_retries = 0; // Fast retransmit
+    uint8_t frr_counter = 0; // Fast retransmit counter, when equals to atp_frr_retries trigger a resending
 
-    // Window
-    // Not used yet
-    uint32_t cur_window_packets = 1; 
+    // Window by Packets
+    static const uint32_t window_packets_unlimited = -1;
+    // set `cur_window_packets` and enable Nagle's stop-and-wait strategy
+    // when set to `window_packets_unlimited` there is no limitation
+    uint32_t cur_window_packets = window_packets_unlimited; 
     // the number of packets in the send queue
     // including unsend and un-acked packets
     // the oldest un-acked packet in the send queue is seq_nr - used_window_packets
     uint32_t used_window_packets = 0; 
+    bool enable_cork = false;
 
+    // Window by Bytes
     // this is byte-wise, set by peer
     // by default = MAX_ATP_READ_BUFFER_SIZE
     size_t cur_window = ATP_MAX_READ_BUFFER_SIZE;
@@ -440,8 +454,22 @@ struct ATPSocket{
     atp_callback_func * callbacks[ATP_CALLBACK_SIZE];
 
     // SACK
+    // If `peer_max_sack_count != 0` then SACK is enabled by peer, they we can SACK peer's packets
+    // `my_max_sack_count` will be sent to peer, with `ATP_OPT_SACKOPT` option to change peer's `peer_max_sack_count` field
+
+    // #define USE_OLD_SACK_FIELD
+    #ifdef USE_OLD_SACK_FIELD
+    // An old solution directly log sequence numbers of all packets need to be SACKed
+    // `peer_max_sack_count` means how many sequence numbers should be attached
     uint8_t peer_max_sack_count = 0;
     uint8_t my_max_sack_count = 5;
+    #else
+    // New solution use a byte array to represent all buffered packets after ack_nr,
+    // an `1` at bit `i` means SACK the packet with `seq_nr == ack_nr + i + 1`
+    // Currently, it means how many bytes should be used to log SACK infomations
+    uint8_t peer_max_sack_count = 0;
+    uint8_t my_max_sack_count = 4;
+    #endif
 
     ~ATPSocket(){
         #if defined (ATP_LOG_AT_DEBUG)
@@ -507,7 +535,7 @@ struct ATPSocket{
     ATP_PROC_RESULT invoke_callback(int callback_type, atp_callback_arguments * args);
     // update my_seq_acked_by_peer
     ATP_PROC_RESULT do_ack_packet(OutgoingPacket * recv_pkt);
-    ATP_PROC_RESULT do_selective_ack_packet(uint16_t * peer_ack_nrs, uint8_t count);
+    ATP_PROC_RESULT do_selective_ack_packet(char * peer_ack_nrs, uint8_t count);
     // according to current base
     uint32_t get_full_seq_nr(uint32_t raw_peer_seq_nr){
         return raw_peer_seq_nr + peer_seq_nr_base;
