@@ -20,7 +20,6 @@
 #include "atp.h"
 #include "atp_impl.h"
 #include "udp_util.h"
-#include <random>
 
 ATP_PROC_RESULT normal_sendto(atp_callback_arguments * args){
     atp_socket * socket = args->socket;
@@ -41,18 +40,6 @@ ATP_PROC_RESULT normal_sendto(atp_callback_arguments * args){
             log_debug(socket, "Call sendto dest %s, UDP Send %d bytes.", handle.hash_code(), n);
         #endif
         return ATP_PROC_OK;
-    }
-};
-ATP_PROC_RESULT simulate_packet_loss_sendto(atp_callback_arguments * args){
-    static std::default_random_engine e{get_current_ms()};
-    static std::uniform_real_distribution<double> u{0, 1};
-    double drop_rate_judge = u(e);
-    if (drop_rate_judge < 0.5)
-    {
-        puts("simulated packet loss");
-        return ATP_PROC_OK;
-    }else{
-        return normal_sendto(args);
     }
 };
 
@@ -81,8 +68,9 @@ void init_callbacks(ATPSocket * socket){
             return ATP_PROC_OK;
         }
     };
-    socket->callbacks[ATP_CALL_SENDTO] = simulate_packet_loss_sendto;
+    socket->callbacks[ATP_CALL_SENDTO] = normal_sendto;
     socket->callbacks[ATP_CALL_ON_RECV] = nullptr;
+    socket->callbacks[ATP_CALL_ON_RECVURG] = nullptr;
     socket->callbacks[ATP_CALL_ON_PEERCLOSE] = [](atp_callback_arguments * args){
         atp_socket * socket = args->socket;
         #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
@@ -97,5 +85,6 @@ void init_callbacks(ATPSocket * socket){
         #endif
         return ATP_PROC_FINISH;
     };
+    socket->callbacks[ATP_CALL_ON_URG_TIMEOUT] = nullptr;
 }
 

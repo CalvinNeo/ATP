@@ -20,7 +20,20 @@
 #include "../atp.h"
 #include "../udp_util.h"
 #include "test.h"
+#include "../atp_impl.h"
 #include <unistd.h>
+
+void activate_nonblock(int fd)
+{
+    int ret;
+    int flags = fcntl(fd, F_GETFL);
+    if (flags == -1)
+        err_sys("fcntl");
+    flags |= O_NONBLOCK;
+    ret = fcntl(fd, F_SETFL, flags);
+    if (ret == -1)
+        err_sys("fcntl");
+}
 
 int main(int argc, char* argv[], char* env[]){
     int oc;
@@ -56,22 +69,17 @@ int main(int argc, char* argv[], char* env[]){
             break;
         }
     }
+    struct sockaddr_in cli_addr; 
     struct sockaddr_in srv_addr; socklen_t srv_len = sizeof(srv_addr);
 
-    char recv_msg[ATP_MAX_READ_BUFFER_SIZE];
+    char recv_msg[ATP_MIN_BUFFER_SIZE];
+    char send_msg[ATP_MIN_BUFFER_SIZE];
+    char ipaddr_str[INET_ADDRSTRLEN];
     int n;
 
     atp_context * context = atp_create_context();
     atp_socket * socket = atp_create_socket(context);
-    if(sock_id != 0){atp_set_long(socket, ATP_API_SOCKID, sock_id); }
     int sockfd = atp_getfd(socket);
-
-    if(cli_port != 0){
-        struct sockaddr_in cli_addr = make_socketaddr_in(AF_INET, "127.0.0.1", cli_port); 
-        if (bind(sockfd, (SA *) &cli_addr, sizeof cli_addr) < 0)
-            err_sys("bind error");
-    }
-
 
     if(simulate_loss){
         atp_set_callback(socket, ATP_CALL_SENDTO, simulate_packet_loss_sendto);
@@ -83,53 +91,80 @@ int main(int argc, char* argv[], char* env[]){
         atp_set_callback(socket, ATP_CALL_SENDTO, normal_sendto);
     }
 
+    // activate_nonblock(STDIN_FILENO);
+    // activate_nonblock(sockfd);
+
     srv_addr = make_socketaddr_in(AF_INET, "127.0.0.1", serv_port);
-    int res = atp_connect(socket, (const SA *)&srv_addr, sizeof srv_addr);
-    if(res != ATP_PROC_OK){
-        printf("Connection Abort.\n");
-        return 0;
-    }
+    atp_async_connect(socket, (const SA *)&srv_addr, sizeof srv_addr);
 
     FILE * fin = fopen(input_file_name, "rb");
-    FileObject fin_obj {fin, ATP_MIN_BUFFER_SIZE};
+    int fd_in = fileno(fin);
+
+    struct pollfd pfd[3];
+    bool stdin_hup = false;
     while (true) {
-        sockaddr * psock_addr = (SA *)&srv_addr;
-        if ((n = recvfrom(sockfd, recv_msg, ATP_MAX_READ_BUFFER_SIZE, 0, psock_addr, &srv_len)) >= 0){
-            ATP_PROC_RESULT result = atp_process_udp(context, sockfd, recv_msg, n, (const SA *)&srv_addr, srv_len);
-            if (result == ATP_PROC_FINISH)
-            {
-                // `atp_process_udp` called `atp_timer_event` which returned ATP_PROC_FINISH
-                break;
-            }
-        }else{
-            if(!(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN)) break;
+        pfd[0].fd = fd_in;
+        pfd[0].events = feof(fin) ? 0: POLLIN;
+
+        pfd[1].fd = sockfd;
+        pfd[1].events = POLLIN;
+
+        pfd[2].fd = STDIN_FILENO;
+        pfd[2].events = feof(stdin) ? 0: POLLIN;
+
+        if(feof(stdin)){
+            stdin_hup = true;
+            printf("stdin closed %llu\n", get_current_ms());
+        }
+        if(feof(fin) && stdin_hup){
+            printf("all closed %llu\n", get_current_ms());
+            atp_close(socket);
+            break;
+        }
+
+        int ret = poll(pfd, 3, 1000);
+        size_t n;
+
+        if (ret < 0) {
+            break;
+        }
+        else if (ret == 0) {
             if(atp_timer_event(context, 1000) == ATP_PROC_FINISH){
-                // Context finished, mission completed, quit
                 break;
             }
         }
-        if(!fin_obj.eof()){
-            while(!fin_obj.eof()){
-                size_t buffer_sz;
-                char * buffer = fin_obj.get(buffer_sz);
-                atp_result r = atp_write(socket, buffer, buffer_sz);
-                if (r >= 0)
-                {
-                    fin_obj.ack_by_n(r);
-                }
-                if (r != buffer_sz)
-                {
-                   // Can't hold
-                   break; 
+        else {
+            if ((pfd[0].revents & POLLIN) == POLLIN) {
+                n = fread(&send_msg, 1, ATP_MIN_BUFFER_SIZE, fin);
+                if(n == 0){
+
+                }else{
+                    atp_write(socket, send_msg, n);
                 }
             }
-        }else{
-            if (atp_sending_status(socket) == ATP_PROC_OK)
-            {
-                // all packets are ACKed
-                puts("Trans Finished");
-                atp_close(socket);
-                break;
+            if ((pfd[1].revents & POLLIN) == POLLIN) {
+                sockaddr * psock_addr = (SA *)&srv_addr;
+                n = recvfrom(sockfd, recv_msg, ATP_MIN_BUFFER_SIZE, 0, psock_addr, &srv_len);
+                if (n < 0) puts("err");
+                ATP_PROC_RESULT result = atp_process_udp(context, sockfd, recv_msg, n, (const SA *)&srv_addr, srv_len);
+                if (result == ATP_PROC_FINISH)
+                {
+                    break;
+                }
+            }
+            if ((pfd[2].revents & POLLIN) == POLLIN) {
+                // n = fread(&send_msg, 1, ATP_MIN_BUFFER_SIZE, stdin);
+                n = fgets(send_msg, ATP_MIN_BUFFER_SIZE, stdin);
+                if(n == 0 || n == EOF){
+
+                }else{
+                    printf("send urg data: %.*s \n", n, send_msg);
+                    fflush(stdin);
+                    fflush(stdout);
+                }
+            }else if((pfd[2].revents & POLLHUP) == POLLHUP){
+                stdin_hup = true;
+                printf("stdin hup %llu\n", get_current_ms());
             }
         }
     }

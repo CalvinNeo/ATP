@@ -223,7 +223,7 @@ ATPSocket * ATPContext::find_socket_by_fd(const ATPAddrHandle & handle_to, int s
     {
         // error
         #if defined (ATP_LOG_AT_DEBUG)
-            log_debug(this, "Can't locate socket:[0.0.0.0:00000]");
+            log_debug(this, "Can't locate socket by fd %u, port: [0.0.0.0:00000]", sockfd);
         #endif
         return nullptr;
     }
@@ -237,7 +237,7 @@ ATPSocket * ATPContext::find_socket_by_fd(const ATPAddrHandle & handle_to, int s
         return socket;
     } else{
         #if defined (ATP_LOG_AT_DEBUG)
-            log_debug(this, "Can't locate listening socket:%u", handle_me.host_port());
+            log_debug(this, "Can't locate socket by fd %u, port: %u", sockfd, handle_me.host_port());
         #endif
         return nullptr;
     }
@@ -250,7 +250,7 @@ ATPSocket * ATPContext::find_socket_by_head(const ATPAddrHandle & handle_to, ATP
     {
         // error
         #if defined (ATP_LOG_AT_DEBUG)
-            log_debug(this, "Can't locate socket:[0.0.0.0:00000]");
+            log_debug(this, "Can't locate socket by packet head:[0.0.0.0:00000]");
         #endif
         return nullptr;
     }
@@ -266,9 +266,9 @@ ATPSocket * ATPContext::find_socket_by_head(const ATPAddrHandle & handle_to, ATP
             for(std::map<std::string, ATPSocket*>::value_type & pr : this->look_up)
             {
                 ext += pr.first;
-                ext += '\n';
+                ext += ' ';
             }
-            log_debug(this, "Can't locate socket:%s, the exsiting %u sockets are: %s\n"
+            log_debug(this, "Can't locate socket by packet head:%s, the exsiting %u sockets are: %s\n"
                 , hashing.c_str(), this->look_up.size(), tabber(ext).c_str());
         #endif
         return nullptr;

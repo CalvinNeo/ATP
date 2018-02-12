@@ -45,11 +45,13 @@ atp_result atp_connect(atp_socket * socket, const struct sockaddr * to, socklen_
 atp_result atp_async_accept(atp_socket * socket, const struct sockaddr * to, socklen_t tolen);
 atp_result atp_accept(atp_socket * socket);
 atp_result atp_write(atp_socket * socket, void * buf, size_t length);
+atp_result atp_write_oob(atp_socket * socket, void * buf, size_t length);
 atp_result atp_process_udp(atp_context * context, int sockfd, const char * buf, size_t len, const struct sockaddr * to, socklen_t tolen);
 atp_result atp_timer_event(atp_context * context, uint64_t interval);
 atp_result atp_close(atp_socket * socket);
 atp_result atp_async_close(atp_socket * socket);
 void atp_set_callback(atp_socket * socket, int callback_type, atp_callback_func * proc);
+
 atp_result atp_eof(atp_socket * socket);
 atp_result atp_sending_status(atp_socket * socket);
 bool atp_destroyed(atp_socket * socket);

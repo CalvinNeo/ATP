@@ -45,6 +45,8 @@
 // define this macro to force a seq_nr overflowing situation
 // #define ATP_DEBUG_TEST_OVERFLOW
 
+// #define ATP_SHUTDOWN_SYN
+
 #define _log_doit _log_doit1
 void _log_doit1(ATPSocket * socket, char const* func_name, int line, int level, char const * fmt, va_list va);
 void _log_doit1(ATPContext * context, char const* func_name, int line, int level, char const * fmt, va_list va);
@@ -109,7 +111,8 @@ enum ATP_OPTION_TYPE{
     ATP_OPT_SOCKID = 0,
     ATP_OPT_MSS,
     ATP_OPT_SACK,
-    ATP_OPT_SACKOPT
+    ATP_OPT_SACKOPT,
+    ATP_OPT_TIMESTAMP
 };
 
 struct PACKED_ATTRIBUTE ATPPacket : public CATPPacket{
@@ -257,7 +260,7 @@ struct OutgoingPacket{
     // bool holder = true;
     // bool marked = false;
     // bool selective_acked = false;
-    uint8_t holder:1, marked:1, selective_acked:1;
+    uint8_t holder:1, marked:1, selective_acked:1, ahead_handled: 1;
     size_t length = 0; // length of the whole
     size_t payload = 0;
     size_t option_len = 0;
@@ -310,9 +313,10 @@ struct OutgoingPacket{
     }
 
     bool is_promised_packet() const{
-        // a promist packet will be resend if not got ACK from peer
+        // a promised packet will be resend if not got ACK from peer
         // only promised packet has seq_nr
         if(get_head()->get_syn() || get_head()->get_fin()){
+            // Notice that SYN/FIN are promised, though they have no user data
             return true;
         }
         if (payload == 0)
@@ -354,18 +358,18 @@ struct ATPSocket{
     uint16_t sock_id;
     uint16_t peer_sock_id = 0;
 
-    mutable ATPAddrHandle src_addr;
-    ATPAddrHandle & get_src_addr(){
+    mutable ATPAddrHandle local_addr;
+    ATPAddrHandle & get_local_addr(){
         if (conn_state == CS_UNINITIALIZED)
         {
-            return src_addr;
+            return local_addr;
         }else{
-            if (src_addr.host_port() == 0 && src_addr.host_addr() == 0)
+            if (local_addr.host_port() == 0 && local_addr.host_addr() == 0)
             {
             }
-            socklen_t my_sock_len = sizeof(src_addr.sa);
-            getsockname(sockfd, reinterpret_cast<SA*> (&src_addr.sa), &my_sock_len);
-            return src_addr;
+            socklen_t my_sock_len = sizeof(local_addr.sa);
+            getsockname(sockfd, reinterpret_cast<SA*> (&local_addr.sa), &my_sock_len);
+            return local_addr;
         }
     }
     ATPAddrHandle dest_addr;
@@ -397,7 +401,6 @@ struct ATPSocket{
     std::vector<OutgoingPacket*> outbuf;
     std::vector<OutgoingPacket*> inbuf;
     std::vector<OutgoingPacket*> inbuf_cache2;
-
 
     // my seq number
     uint32_t seq_nr = 0;
@@ -436,28 +439,31 @@ struct ATPSocket{
     uint32_t cur_window_packets = window_packets_unlimited; 
     // the number of packets in the send queue
     // including unsend and un-acked packets
-    // the oldest un-acked packet in the send queue is seq_nr - used_window_packets
+    // the oldest un-acked packet in the send queue is seq_nr - used_window_packets == my_seq_acked_by_peer
     uint32_t used_window_packets = 0; 
     bool enable_cork = false;
 
     // Window by Bytes
     // this is byte-wise, set by peer
-    // by default = MAX_ATP_READ_BUFFER_SIZE
-    size_t cur_window = ATP_MAX_READ_BUFFER_SIZE;
+    static const size_t window_unlimited = -1;
+    // by default = ATP_MAX_WRITE_BUFFER_SIZE
+    size_t cur_window = window_packets_unlimited;
     // this is byte-wise, payload of in-flight packets + payload of needing to be re-sent packets
     size_t used_window = 0;
-    size_t my_window = ATP_MAX_WRITE_BUFFER_SIZE;
-    
-    // determined by MTU
+    // This is the maximum bytes of data per packet peer's buffer can handle
+    size_t peer_window = window_packets_unlimited;
+    // This is the maximum bytes of data per packet our buffer can handle, will be attached with our packets to peer
+    size_t my_window = window_packets_unlimited;
+
+    // MSS and MTU probing
     size_t current_mss = ATP_MSS_CEILING;
 
-    atp_callback_func * callbacks[ATP_CALLBACK_SIZE];
+    // Reorder infomations
+    uint16_t reorder_count = 0;
 
     // SACK
     // If `peer_max_sack_count != 0` then SACK is enabled by peer, they we can SACK peer's packets
     // `my_max_sack_count` will be sent to peer, with `ATP_OPT_SACKOPT` option to change peer's `peer_max_sack_count` field
-
-    // #define USE_OLD_SACK_FIELD
     #ifdef USE_OLD_SACK_FIELD
     // An old solution directly log sequence numbers of all packets need to be SACKed
     // `peer_max_sack_count` means how many sequence numbers should be attached
@@ -470,6 +476,14 @@ struct ATPSocket{
     uint8_t peer_max_sack_count = 0;
     uint8_t my_max_sack_count = 4;
     #endif
+
+    // callbacks
+    atp_callback_func * callbacks[ATP_CALLBACK_SIZE];
+
+    struct DelayInfo{
+
+    };
+
 
     ~ATPSocket(){
         #if defined (ATP_LOG_AT_DEBUG)
@@ -503,14 +517,12 @@ struct ATPSocket{
     // passive connect
     ATP_PROC_RESULT accept(const ATPAddrHandle & to_addr, OutgoingPacket * recv_pkt);
     ATP_PROC_RESULT receive(OutgoingPacket * recv_pkt, size_t real_payload_offset);
-    void reset_timer(){
-
-    }
 
     ATP_PROC_RESULT send_packet_noguard(OutgoingPacket * out_pkt);
+    // `check_unsend_packet` will send all packets which are allowed to be sent but haven't yet been sent.
     void check_unsend_packet();
     // `send_packet` will take over possession of `out_pkt`
-    ATP_PROC_RESULT send_packet(OutgoingPacket * out_pkt);
+    ATP_PROC_RESULT send_packet(OutgoingPacket * out_pkt, bool flush_packets = true);
     ATP_PROC_RESULT close();
     bool writable() const;
     bool readable() const;
@@ -521,8 +533,10 @@ struct ATPSocket{
     bool is_full() const {return bytes_can_send_once() == 0;}
     // this function returns immediately after the packet is sent(whether succeed or fail)
     ATP_PROC_RESULT write(const void * buf, const size_t len);
+    ATP_PROC_RESULT write_oob(const void * buf, const size_t len, uint32_t timeout);
     // this function returns only when got ack from peer
-    ATP_PROC_RESULT blocked_write(const void * buf, const size_t len);
+    // ATP_PROC_RESULT blocked_write(const void * buf, const size_t len);
+
     // handles FIN
     ATP_PROC_RESULT check_fin(OutgoingPacket * recv_pkt);
     // handles ACK, when a ack packet comes, update ack_nr
@@ -536,21 +550,34 @@ struct ATPSocket{
     // update my_seq_acked_by_peer
     ATP_PROC_RESULT do_ack_packet(OutgoingPacket * recv_pkt);
     ATP_PROC_RESULT do_selective_ack_packet(char * peer_ack_nrs, uint8_t count);
-    // according to current base
+    // TODO Following 2 functions are used to reuse packets with no user data to carry user data
+    // Find the an empty packet with no payload or only option payload
+    OutgoingPacket * find_no_data_packet();
+    // Fill data in a packet, return how many bytes are inserted. 
+    // write -> fill_packet -> add_data
+    size_t fill_packet(OutgoingPacket * pkt, const char * buffer, size_t len);
+    // S->R
+    void compute_clock_skew();
+    // R->S
+    void compute_clock_skew(OutgoingPacket * recv_pkt);
+    // get full sequence number according to **current** base
     uint32_t get_full_seq_nr(uint32_t raw_peer_seq_nr){
         return raw_peer_seq_nr + peer_seq_nr_base;
     }
     // guess which base
     uint32_t guess_full_seq_nr(uint32_t raw_peer_seq);
     uint32_t guess_full_ack_nr(uint32_t raw_peer_ack);
+    // update cur_window according to new `peer_window`
+    void update_window(uint16_t new_peer_window);
     void update_rto(OutgoingPacket * recv_pkt);
+    void schedule_ack();
     void destroy();
     ATP_PROC_RESULT check_timeout();
     const char * hash_code() const{
         return ATPSocket::make_hash_code(sock_id, dest_addr);
     }
     const char * to_string() const{
-        sprintf(hash_str, "[%05u](%s:%05u)->(%s:%05u) fd:%d", sock_id, this->get_src_addr().to_string(), this->get_src_addr().host_port()
+        sprintf(hash_str, "[%05u](%s:%05u)->(%s:%05u) fd:%d", sock_id, this->get_local_addr().to_string(), this->get_local_addr().host_port()
             , dest_addr.to_string(), dest_addr.host_port(), sockfd);
         return const_cast<const char *>(hash_str);
     }
@@ -597,6 +624,8 @@ struct ATPContext{
     uint32_t min_msl2 = 6000; 
 
     std::vector<ATPSocket *> sockets;
+    // `look_up` marks every socket's dest_addr and sock_id, 
+    // so local socket can be located by an in-coming packet
     std::map<std::string, ATPSocket *> look_up;
     std::map<uint16_t, ATPSocket *> listen_sockets;
     std::vector<ATPSocket *> destroyed_sockets;
@@ -621,7 +650,7 @@ struct ATPContext{
         {
             look_up.erase(map_iter1);
         }
-        auto map_iter2 = listen_sockets.find(socket->get_src_addr().host_port());
+        auto map_iter2 = listen_sockets.find(socket->get_local_addr().host_port());
         if (map_iter2 != listen_sockets.end())
         {
             listen_sockets.erase(map_iter2);

@@ -174,6 +174,11 @@ ATP_PROC_RESULT atp_write(atp_socket * socket, void * buf, size_t length){
     return socket->write(buf, length);
 }
 
+ATP_PROC_RESULT atp_write_oob(atp_socket * socket, void * buf, size_t length, uint32_t timeout){
+    if(socket == nullptr) return ATP_PROC_ERROR;
+    return socket->write_oob(buf, length, timeout);
+}
+
 ATP_PROC_RESULT atp_process_udp(atp_context * context, int sockfd, const char * buf, size_t len, const struct sockaddr * to, socklen_t tolen){
     if(socket == nullptr) return ATP_PROC_ERROR;
     ATPAddrHandle handle_to(to);
@@ -260,6 +265,9 @@ void atp_set_long(atp_socket * socket, size_t option, size_t value){
         break;
     case ATP_API_SOCKID:
         socket->sock_id = value;
+        #if defined (ATP_LOG_AT_DEBUG)
+            log_debug(socket, "Manually change sock_id to %u", socket->sock_id);
+        #endif
         break;
     }
 }

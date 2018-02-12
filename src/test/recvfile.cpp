@@ -56,18 +56,26 @@ void reg_sigterm_handler(void (*handler)(int s))
 int main(int argc, char* argv[], char* env[]){
     int oc;
     bool simulate_loss = false;
+    bool simulate_delay = false;
     uint16_t serv_port = 9876;
+    uint16_t cli_port = 0;
     char output_file_name[255] = "out.dat";
     uint16_t sock_id = 0;
-    while((oc = getopt(argc, argv, "o:lp:s:")) != -1)
+    while((oc = getopt(argc, argv, "o:lp:s:P:d")) != -1)
     {
         switch(oc)
         {
+        case 'd':
+            simulate_delay = true;
+            break;
         case 'l':
             simulate_loss = true;
             break;
         case 'p':
             sscanf(optarg, "%u", &serv_port);
+            break;
+        case 'P':
+            sscanf(optarg, "%u", &cli_port);
             break;
         case 'o':
             strcpy(output_file_name, optarg);
@@ -89,11 +97,17 @@ int main(int argc, char* argv[], char* env[]){
     atp_context * context = atp_create_context();
     atp_socket * socket = atp_create_socket(context);
     if(sock_id != 0){atp_set_long(socket, ATP_API_SOCKID, sock_id); }
+    
     int sockfd = atp_getfd(socket);
     atp_set_callback(socket, ATP_CALL_ON_RECV, data_arrived);
+
     if(simulate_loss){
         atp_set_callback(socket, ATP_CALL_SENDTO, simulate_packet_loss_sendto);
-    }else{
+    }
+    if(simulate_delay){
+        atp_set_callback(socket, ATP_CALL_SENDTO, simulate_delayed_sendto);
+    }
+    if(!simulate_delay && !simulate_loss){
         atp_set_callback(socket, ATP_CALL_SENDTO, normal_sendto);
     }
 

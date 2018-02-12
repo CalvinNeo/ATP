@@ -101,8 +101,10 @@ enum ATP_CALLBACKTYPE_ENUM{
     ATP_CALL_ON_ESTABLISHED,
     ATP_CALL_SENDTO,
     ATP_CALL_ON_RECV,
+    ATP_CALL_ON_RECVURG,
     ATP_CALL_ON_PEERCLOSE,
     ATP_CALL_ON_DESTROY,
+    ATP_CALL_ON_URG_TIMEOUT,
 
     ATP_CALLBACK_SIZE, // must be the last
 };
@@ -147,12 +149,15 @@ struct PACKED_ATTRIBUTE CATPPacket{
 #define IPV6_HEADER_SIZE 40
 #define UDP_HEADER_SIZE 8
 #define TCP_DEFAULT_MSS 536
+// Maximum size of an ATPPacket(head + option + data)
 static const size_t MAX_UDP_PAYLOAD = ATP_IP_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE;
-static const size_t MAX_ADP_PAYLOAD = ATP_IP_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE - sizeof(CATPPacket);
-// Max size of an ATPPacket(including head)
-static const size_t ATP_MAX_WRITE_BUFFER_SIZE = MAX_UDP_PAYLOAD;
+// Maximum payload of an ATPPacket(option + data)
+static const size_t MAX_ATP_PAYLOAD = ATP_IP_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE - sizeof(CATPPacket);
+// The maximum size needed to buffer ONE sent APTPacket
+static const size_t ATP_MAX_WRITE_BUFFER_SIZE = MAX_ATP_PAYLOAD;
+// The maximum size needed to buffer ONE received APTPacket
 static const size_t ATP_MAX_READ_BUFFER_SIZE = MAX_UDP_PAYLOAD;
-// recommended size of buffer, when calling write once, +1 is for the last '\0'
+// recommended size of buffer, when calling write once
 static const size_t ATP_MIN_BUFFER_SIZE = ETHERNET_MTU - IPV4_HEADER_SIZE - sizeof(CATPPacket) - UDP_HEADER_SIZE;
 // The "MSS" to avoid IP fragmentation, range from [ATP_MSS_CEILING, ATP_MSS_FLOOR]
 static const size_t ATP_MSS_CEILING = ETHERNET_MTU - IPV4_HEADER_SIZE - UDP_HEADER_SIZE - sizeof(CATPPacket);

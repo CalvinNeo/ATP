@@ -18,7 +18,7 @@ all: demos
 
 demo: recv send 
 demo_file: sendfile recvfile 
-demo_poll: send_poll recv
+demo_poll: sendfile_poll recv
 
 demos: CFLAGS_COV = 
 demos: CFLAGS_COV_LNK = 
@@ -26,7 +26,7 @@ demos: lib demo demo_file demo_poll
 
 demos_cov: CFLAGS_COV = -fprofile-arcs -ftest-coverage -fno-inline -DATP_LOG_AT_NOTE -DATP_LOG_AT_DEBUG -DATP_LOG_UDP -DATP_DEBUG_TEST_OVERFLOW
 demos_cov: CFLAGS_COV_LNK = -fprofile-arcs -ftest-coverage --coverage -fno-inline -DATP_LOG_AT_NOTE -DATP_LOG_AT_DEBUG -DATP_LOG_UDP -DATP_DEBUG_TEST_OVERFLOW
-demos_cov: lib demo_file
+demos_cov: lib demo_file packet_sim demo_poll
 
 # use bash's `&` and wait cause trouble here, refer to earlier commits
 run_test:
@@ -38,7 +38,8 @@ run_cov: run_test
 	gcov -r -o $(OBJ_ROOT)/*.gcno
 
 run_lcov: 
-	lcov -c -o ATP.lcov.info -d $(OBJ_ROOT)/
+	lcov -c -o ATP.lcov.info -d ./
+	# lcov -c -o ATP.lcov.info -d $(OBJ_ROOT)/
 	genhtml ATP.lcov.info -o ATPLCovHTML
 
 run_coveralls_local: run_cov
@@ -56,17 +57,20 @@ recv:
 send: 
 	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/send $(SRC_ROOT)/test/send.cpp -L/usr/lib/ $(BIN_ROOT)/libatp.a
 
-send_poll: 
-	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/send_poll $(SRC_ROOT)/test/send_poll.cpp $(OBJS) -L/usr/lib/ $(BIN_ROOT)/libatp.a
+sendfile_test: 
+	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/sendfile_test $(SRC_ROOT)/test/sendfile_test.cpp 
+
+sendfile_poll: 
+	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/sendfile_poll $(SRC_ROOT)/test/sendfile_poll.cpp $(OBJS) -L/usr/lib/ -lpthread $(BIN_ROOT)/libatp.a
 
 sendfile: 
-	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/sendfile $(SRC_ROOT)/test/sendfile.cpp -L/usr/lib/ $(BIN_ROOT)/libatp.a
+	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/sendfile $(SRC_ROOT)/test/sendfile.cpp -L/usr/lib/ -lpthread $(BIN_ROOT)/libatp.a
 
 recvfile: 
-	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/recvfile $(SRC_ROOT)/test/recvfile.cpp -L/usr/lib/ $(BIN_ROOT)/libatp.a
+	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/recvfile $(SRC_ROOT)/test/recvfile.cpp -L/usr/lib/ -lpthread $(BIN_ROOT)/libatp.a
 
 send_aio: 
-	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/send_aio $(SRC_ROOT)/test/send_aio.cpp -L/usr/lib/ -lrt $(BIN_ROOT)/libatp.a
+	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/send_aio $(SRC_ROOT)/test/send_aio.cpp -L/usr/lib/ -lrt -lpthread $(BIN_ROOT)/libatp.a
 
 packet_sim: 
 	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/packet_sim $(SRC_ROOT)/test/packet_sim.cpp -L/usr/lib/ $(BIN_ROOT)/libatp.a
@@ -87,8 +91,8 @@ $(OBJ_ROOT):
 .PHONY: clean
 clean: clean_cov
 	rm -rf $(BIN_ROOT)
-.PHONY: cleand
-cleand:
+.PHONY: clc
+clc:
 	rm -f core
 .PHONY: clean_cov
 clean_cov:

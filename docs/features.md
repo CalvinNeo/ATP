@@ -1,5 +1,5 @@
 # Acknowledge
-ATP uses the `ACK` flag to acknowledge packets with **user data** from peer.
+As is discussed in ACK flag, ATP uses the `ACK` flag to acknowledge packets with **user data** from peer.
 
 ## Delayed ACK
 
@@ -16,15 +16,13 @@ Use function `OutgoingPacket::is_promised_packet` to check whether a packet can 
 	In order to reduce network cost, a packet with no user data(even if it contains payload of option) will not be re-sent.
 
 
-## computing RTO
+## Computing RTO
 
 # SACK
 When `my_max_sack_count` is set to non-zero, a `ATP_OPT_SACKOPT` option will be attached to the SYN packets at the connection establishing stage. When handling the `ATP_OPT_SACKOPT` option, `my_max_sack_count` will be updated. 
 
-# Reuse address
-Every ATP socket has a distinct sock\_id, multiple ATP sockets can read/write bi-directionally through the same UDP socket. Thus when a ATP Socket is destructed, it will not wait very short TIME\_WAIT time.
 
-# Fast Retransmit
+# Fast retransmit
 
 # Handle SEQ/ACK number overflowing situation
 
@@ -32,5 +30,11 @@ Every ATP socket has a distinct sock\_id, multiple ATP sockets can read/write bi
 Nagle's algorithm inhibit the sending of new TCP segments when new outgoing data arrives from the user if any previously transmitted data on the connection remains unacknowledged.
 ATP use `ATPSocket::cur_window_packets` to control numbers of the in-flight packets which haven't been acknowledged. Nagle's algorithm is enabled when `cur_window_packets = 1`.
 
+# Reuse address
+Every ATP socket has a distinct sock\_id, multiple ATP sockets can read/write bi-directionally through the same UDP socket. Thus when a ATP Socket is destructed, it will not wait very short TIME\_WAIT time.
+
 # Traffic control
+## Peer's window
 a Sliding Window Protocol implementation is provided in ATP.
+
+## Congestion window
