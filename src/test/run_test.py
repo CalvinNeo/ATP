@@ -18,6 +18,7 @@
 
 import os, sys
 import subprocess
+import signal
 import time
 import math, random
 import multiprocessing
@@ -36,7 +37,8 @@ def wait_procs(procs, timeout):
         for (i, proc) in enumerate(procs):
             if proc.poll() == None:
                 print "Kill proc %d %s." % (i, str(proc.pid))
-                proc.terminate()
+                # proc.terminate()
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
     timer = Timer(timeout, kill_proc)
     timer.start()
 
@@ -59,18 +61,19 @@ def wait_procs(procs, timeout):
         print "Quit by Ctrl+C"
         for proc in procs:
             if proc.poll() == None:
-                proc.kill()
+                # proc.kill()
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         timer.cancel()
         sys.exit(1)
 
-def start_procs(exes):
+def start_procs(exes, in_shell = False):
     def create_subproc4(exe, fin, fout, ferr):
-        subproc = subprocess.Popen(exe, stdin = fin, stdout = fout, stderr = ferr) 
+        subproc = subprocess.Popen(exe, stdin = fin, stdout = fout, stderr = ferr, shell = in_shell, preexec_fn = os.setsid) 
         return subproc
 
     procs = []
     for (index, (exe, i, o, e)) in enumerate(exes):
-        print "Create proc %d %s." % (index, exe)
+        print "Create proc %d with arguments %s." % (index, exe)
         procs.append(create_subproc4(exe, i, o, e))
         time.sleep(0.5)
     return procs
@@ -89,28 +92,18 @@ def test_once4(exe_send, exe_recv, input_fn, output_fn, timeout):
     except OSError:
         pass
 
-def main():
-
-    # subproc = subprocess.Popen(["./bin/sendfile_test"], stdin = subprocess.PIPE, stdout = None, stderr = None) 
-    # def callback_urg():
-    #     time.sleep(1)
-    #     # subproc.communicate("1\n")
-    #     # subproc.stdin.write("1\n")
-    #     subproc.stdin.close()
-    # t = Thread(target=callback_urg)
-    # t.start()
-    # subproc.wait()
-    # t.join()
-
+def test_normal():
     print "test poll and urg"
     r = (["./bin/recvfile", "-oout.dat"], subprocess.PIPE, open("r.log", "w"), open("r1.log", "w"))
-    s = (["./bin/sendfile_poll", "-iin.dat"], subprocess.PIPE, open("s.log", "w"), open("s1.log", "w"))
+    s = (["./bin/sendfile_poll", "-iin.dat", "-d0", "-l0"], subprocess.PIPE, open("s.log", "w"), open("s1.log", "w"))
     procs = start_procs([r, s])
     def callback_urg():
-        time.sleep(3)
+        time.sleep(1) # wait till connection is established
         print "start sending URG messages"
         procs[1].stdin.write("urg msg start\n")
+        procs[1].stdin.write("Hello, world!\n")
         time.sleep(1)
+        procs[1].stdin.write("urg msg end\n")
         procs[1].stdin.close()
         print "end sending URG messages"
     t = Thread(target=callback_urg)
@@ -118,22 +111,41 @@ def main():
     wait_procs(procs, 20.0)
     t.join()
 
-    print "test at 1000ms delay(connection may not be established)"
-    test_once4(["./bin/sendfile", "-d1000"], ["./bin/recvfile", "-d1000"], "in.dat", "out.dat", 130.0)
+    print "test normal"
+    test_once4(["./bin/sendfile"], ["./bin/recvfile"], "in.dat", "out.dat", 20.0)
 
-    # print "test at 200ms delay"
-    # test_once4(["./bin/sendfile", "-d"], ["./bin/recvfile", "-d"], "in.dat", "out.dat", 130.0)
+    print "test clock drift"
+    r = (["./bin/recv -s"], None, open("r.log", "w"), open("r1.log", "w"))
+    s = (["./bin/send -s"], subprocess.PIPE, open("s.log", "w"), open("s1.log", "w"))
+    procs = start_procs([r, s], True) # Must in shell, otherwise cause strange block
+    def callback_drift():
+        time.sleep(1) # wait till connection is established
+        print "start sending simulated packets"
+        procs[1].stdin.write("s0 a0 i0 o0 fA w65535 p9876\n")
+        # test packet with an option
+        # procs[1].stdin.write("s0 a0 i0 o0 fA w65535 p9876 O{ATP_OPT_SOCKID 2 100}\n")
+        procs[1].stdin.write("s0 a0 i0 o0 fA w65535 p9876 O{ATP_OPT_MSS 4 100}\n")
+        # start clock drift probing
+        procs[1].stdin.write(":S\n")
+        print "end sending simulated packets"
+        procs[1].stdin.close()
 
-    print "test_fragmentation"
+    t = Thread(target=callback_drift)
+    t.start()
+    wait_procs(procs, 10.0)
+    t.join()
 
-    print "test_port_multiplexing"
 
-    print "test invalid packet"
+def test_invalid_conditions():
+    print "test sending invalid packet"
     def callback_invalid():
-        time.sleep(3)
+        time.sleep(0.8)
         print "send simulated SYN packet to a non-exist socket."
-        subprocess.call([os.getcwd() + '/bin/packet_sim', '-s0', '-a0', '-i113', '-o0', '-fS', '-w65535', '-p9876'], stdout=None)  
+        # In this case, recvfile is no longer listening to port 9876, so there will be a "Can't locate ... by fd" error in r1.log
+        subprocess.call([os.getcwd() + '/bin/packet_sim', '-s0', '-a0', '-i113', '-o0', '-fS', '-w65535', '-p9876'], stdout=None)
+
         print "send simulated normal packet to a non-exist socket."
+        # In this case, there's no socket which receives packet of port 9876 and sockid 113, so there will be a "Can't locate ... by packet head" error in r1.log
         subprocess.call([os.getcwd() + '/bin/packet_sim', '-s0', '-a0', '-i113', '-o0', '-f', '-w65535', '-p9876'], stdout=None) 
 
         # print "send simulated RST packet to an exist socket to recvfile by faking myself as sendfile."
@@ -143,16 +155,25 @@ def main():
     t.start()
     test_once4(["./bin/sendfile", "-p9876", "-s111", "-P4444"], ["./bin/recvfile", "-p9876", "-s112"], "in.dat", "out.dat", 20.0)
     t.join()
-    
-    print "test normal"
-    test_once4(["./bin/sendfile"], ["./bin/recvfile"], "in.dat", "out.dat", 20.0)
 
-    print "test different port"
+    # print "test on a non-listening port"
+    # In this case, recvfile will receive no UDP packet from sendfile
     test_once4(["./bin/sendfile", "-p9876"], ["./bin/recvfile", "-p9877"], "in.dat", "out.dat", 15.0)
+
+def test_on_bad_network():
+    print "test at 1000ms delay(connection may not be established)"
+    test_once4(["./bin/sendfile", "-d1000"], ["./bin/recvfile", "-d1000"], "in.dat", "out.dat", 50.0)
 
     print "test at 50% loss rate"
     test_once4(["./bin/sendfile", "-l0.5"], ["./bin/recvfile", "-l0.5"], "in.dat", "out.dat", 130.0)
-    
+
+def main():
+    test_normal()
+
+    test_on_bad_network()
+
+    test_invalid_conditions()
+
     return
 
 if __name__ == '__main__':

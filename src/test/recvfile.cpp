@@ -20,7 +20,7 @@
 #include "../atp.h"
 #include "../udp_util.h"
 #include "../scaffold.h"
-#include "test.h"
+#include "test.inc.h"
 #include <unistd.h>
 
 FILE * fout;
@@ -34,25 +34,15 @@ ATP_PROC_RESULT data_arrived(atp_callback_arguments * args){
     return ATP_PROC_OK;
 }
 
-static void sigterm_handler(int signum)
-{
-    puts("Timeout Term.");
-    exit(0);
-}
+ATP_PROC_RESULT urg_msg_arrived(atp_callback_arguments * args){
+    atp_socket * socket = args->socket;
+    size_t length = args->length; 
+    const char * data = args->data;
+    printf("URG: ");
+    fwrite(data, 1, length, stdout);
+    return ATP_PROC_OK;
+};
 
-void reg_sigterm_handler(void (*handler)(int s))
-{
-    struct sigaction action, old_action;
-
-    action.sa_handler = handler;
-    sigemptyset(&action.sa_mask);
-    action.sa_flags = 0;
-
-    sigaction(SIGTERM, NULL, &old_action);
-    if (old_action.sa_handler != SIG_IGN) {
-        sigaction(SIGTERM, &action, NULL);
-    }
-}
 int main(int argc, char* argv[], char* env[]){
     int oc;
     bool simulate_loss = false;
@@ -61,14 +51,16 @@ int main(int argc, char* argv[], char* env[]){
     uint16_t cli_port = 0;
     char output_file_name[255] = "out.dat";
     uint16_t sock_id = 0;
-    while((oc = getopt(argc, argv, "o:lp:s:P:d")) != -1)
+    while((oc = getopt(argc, argv, "o:l:p:s:P:d:")) != -1)
     {
         switch(oc)
         {
         case 'd':
+            sscanf(optarg, "%u", &delay_time);
             simulate_delay = true;
             break;
         case 'l':
+            sscanf(optarg, "%lf", &loss_rate);
             simulate_loss = true;
             break;
         case 'p':
@@ -100,6 +92,7 @@ int main(int argc, char* argv[], char* env[]){
     
     int sockfd = atp_getfd(socket);
     atp_set_callback(socket, ATP_CALL_ON_RECV, data_arrived);
+    atp_set_callback(socket, ATP_CALL_ON_RECVURG, urg_msg_arrived);
 
     if(simulate_loss){
         atp_set_callback(socket, ATP_CALL_SENDTO, simulate_packet_loss_sendto);

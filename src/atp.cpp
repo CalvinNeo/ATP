@@ -278,5 +278,11 @@ size_t atp_get_long(atp_socket * socket, size_t option){
         return socket->my_max_sack_count;
     case ATP_API_SOCKID:
         return socket->sock_id;
+    case ATP_API_STATUS:
+        return socket->conn_state;
+    case ATP_API_WRITABLE:
+        return socket->writable();
+    case ATP_API_READABLE:
+        return socket->readable();
     }
 }

@@ -188,16 +188,16 @@ struct ATPAddrHandle{
         sa = rhs;
         return *this;
     }
-    bool operator==(const ATPAddrHandle & rhs) const{
+    inline bool operator==(const ATPAddrHandle & rhs) const{
         if(this == &rhs){
             return true;
         }
         return (port() == rhs.port() && addr() == rhs.addr());
     }
-    bool operator!=(const ATPAddrHandle & rhs) const{
+    inline bool operator!=(const ATPAddrHandle & rhs) const{
         return !(*this == rhs);
     }
-    void from_string(const char * _ipaddstr, int _port){
+    inline void from_string(const char * _ipaddstr, int _port){
         int n;
         if ((n = ::inet_pton(sa.sin_family, _ipaddstr, &(sa.sin_addr.s_addr))) < 0)
             err_sys("inet_pton error -1"); 
@@ -205,47 +205,54 @@ struct ATPAddrHandle{
             err_sys("inet_pton error 0"); 
         set_port(_port);
     }
-    const char * to_string() const{
+    inline const char * to_string() const{
         ::inet_ntop(sa.sin_family, &addr(), fmt, INET_ADDRSTRLEN);
         return const_cast<const char *>(fmt);
     }
-    const char * hash_code() const{
+    inline const char * hash_code() const{
         std::sprintf(fmt, "%s:%05u", to_string(), host_port());
         return const_cast<const char *>(fmt);
     }
-    void set_port(in_port_t _port){
+    inline void set_port(in_port_t _port){
         sa.sin_port = htons(_port);
     }
-    void set_addr(in_addr_t _addr){
+    inline void set_addr(in_addr_t _addr){
         sa.sin_addr.s_addr = htonl(_addr);
     }
-    in_port_t & port(){
+    inline in_port_t & port(){
         return sa.sin_port;
     }
-    in_addr_t & addr(){
+    inline in_addr_t & addr(){
         return sa.sin_addr.s_addr;
     }
-    const in_port_t & port() const{
+    inline const in_port_t & port() const{
         return sa.sin_port;
     }
-    const in_addr_t & addr() const{
+    inline const in_addr_t & addr() const{
         return sa.sin_addr.s_addr;
     }
-    uint16_t host_port() const{
+    inline uint16_t host_port() const{
         return ntohs(sa.sin_port);
     }
-    uint32_t host_addr() const{
+    inline uint32_t host_addr() const{
         return ntohl(sa.sin_addr.s_addr);
     }
-    decltype(sockaddr_in::sin_family) & family() {
+    inline decltype(sockaddr_in::sin_family) & family() {
         return sa.sin_family;
     }
-    size_t length() const{
+    inline size_t length() const{
         return sizeof sa;
     }
     struct sockaddr_in sa;
 private:
     mutable char fmt[INET_ADDRSTRLEN];
+};
+
+struct PACKED_ATTRIBUTE TimeDelayOption{
+    // Our local time when we receive a time delay probing packet from peer
+    uint64_t receive_timestamp;
+    // Our local time when we reply to peer our time delay infos
+    uint64_t reply_timestamp;
 };
 
 struct OutgoingPacket{
@@ -260,13 +267,12 @@ struct OutgoingPacket{
     // bool holder = true;
     // bool marked = false;
     // bool selective_acked = false;
-    uint8_t holder:1, marked:1, selective_acked:1, ahead_handled: 1;
+    uint8_t holder:1, marked:1, selective_acked:1, ahead_handled: 1, need_resend: 1;
     size_t length = 0; // length of the whole
     size_t payload = 0;
     size_t option_len = 0;
     uint64_t timestamp; // microseconds
     uint32_t transmissions = 0; // total number of transmissions
-    bool need_resend;
     uint32_t full_seq_nr;
     char * data; // = head + data
 
@@ -290,6 +296,8 @@ struct OutgoingPacket{
     }
 
     void update_real_payload(){
+        // This function is used to calculate a received packet.
+        // For sent packet, `add_option` update `option_len` automatically.
         option_len = 0;
         char * p = data + sizeof(ATPPacket);
         for(uint8_t i = 0; i < get_head()->opts_count; i++){
@@ -350,16 +358,19 @@ struct OutgoingPacket{
     const ATPPacket * get_head() const {
         return reinterpret_cast<ATPPacket *>(data);
     }
+
+    static std::string get_flags_str(OutgoingPacket const * out_pkt);
 };
 
 struct ATPSocket{
     ATPContext * context = nullptr;
-    // function as "port"
+    // sockids function as an extra "port"
     uint16_t sock_id;
+    // peer sock id is set by ATP_OPT_SOCKID at connection establishing stage
     uint16_t peer_sock_id = 0;
 
     mutable ATPAddrHandle local_addr;
-    ATPAddrHandle & get_local_addr(){
+    inline ATPAddrHandle & get_local_addr(){
         if (conn_state == CS_UNINITIALIZED)
         {
             return local_addr;
@@ -421,11 +432,13 @@ struct ATPSocket{
     uint32_t ack_delayed_time = 200; // default 200, set 0 to disable delayed ACK
 
     // These are time point, don't modify
-    uint64_t delay_ack_timeout = 0; // at this exact time send delayed ACK
+    uint64_t delay_ack_timeout = 0; // at this exact time send delayed ACK, set 0 to cancel a due scheduled ACK
     uint64_t rto_timeout = 0; // at this exact time(ms) will this socket timeout
     uint64_t death_timeout = 0; // at this exact time change from TIME_WAIT to DESTROY
     uint64_t persist_timeout = 0; // at this exact time probe peer's window
 
+    // a global counter for transmissions may be worth used
+    uint8_t transmission_counter = 0;
     uint8_t atp_retries1 = 3; // TCP RFC recommends 3
     uint8_t atp_retries2 = 8; // TCP RFC recommends 15
     uint8_t atp_syn_retries1 = 5;
@@ -433,7 +446,8 @@ struct ATPSocket{
     uint8_t frr_counter = 0; // Fast retransmit counter, when equals to atp_frr_retries trigger a resending
 
     // Window by Packets
-    static const uint32_t window_packets_unlimited = -1;
+    // NOTICE that type must be `int` rather than any unsigned
+    static const int window_packets_unlimited = -1;
     // set `cur_window_packets` and enable Nagle's stop-and-wait strategy
     // when set to `window_packets_unlimited` there is no limitation
     uint32_t cur_window_packets = window_packets_unlimited; 
@@ -480,10 +494,29 @@ struct ATPSocket{
     // callbacks
     atp_callback_func * callbacks[ATP_CALLBACK_SIZE];
 
-    struct DelayInfo{
+    struct DelaySample{
+        // T1: Originate Timestamp
+        // T2: Receive Timestamp
+        // T3: Transmit Timestamp
+        // T4: Destination Timestamp
+        uint64_t t1;
+        uint64_t t2;
+        uint64_t t3;
+        uint64_t t4;
 
+        int64_t get_drift() const{
+            return (int64_t(t2 - t1) + int64_t(t3 - t4)) / 2;
+        }
+        int64_t get_network_delay() const{
+            return (int64_t(t2 - t1) + int64_t(t4 - t3)) / 2;
+        }
     };
 
+    uint64_t last_receive_timestamp = 0;
+    uint64_t last_send_timestamp = 0;
+    DelaySample make_delay_sample(TimeDelayOption time_delay){
+        return DelaySample{0, time_delay.receive_timestamp, time_delay.reply_timestamp, 0};
+    }
 
     ~ATPSocket(){
         #if defined (ATP_LOG_AT_DEBUG)
@@ -498,16 +531,7 @@ struct ATPSocket{
     OutgoingPacket * basic_send_packet(uint16_t flags);
 
     // INTERFACES
-    void clear(){
-        for(OutgoingPacket * op : outbuf){
-            delete op;
-        }
-        outbuf.clear();
-        for(OutgoingPacket * op : inbuf){
-            delete op;
-        }
-        inbuf.clear();
-    }
+    void clear();
     // called by atp_create_socket, returns sockfd
     int init(int family, int type, int protocol);
     // active connect
@@ -517,20 +541,27 @@ struct ATPSocket{
     // passive connect
     ATP_PROC_RESULT accept(const ATPAddrHandle & to_addr, OutgoingPacket * recv_pkt);
     ATP_PROC_RESULT receive(OutgoingPacket * recv_pkt, size_t real_payload_offset);
-
-    ATP_PROC_RESULT send_packet_noguard(OutgoingPacket * out_pkt);
+    // `send_packet_noguard` is function who actually sends packets
+    ATP_PROC_RESULT send_packet_noguard(OutgoingPacket * out_pkt, bool adhoc = false);
+    // `send_packet` will take over possession of `out_pkt`
+    ATP_PROC_RESULT send_packet(OutgoingPacket * out_pkt, bool flush_packets = true, bool adhoc = false);
     // `check_unsend_packet` will send all packets which are allowed to be sent but haven't yet been sent.
     void check_unsend_packet();
-    // `send_packet` will take over possession of `out_pkt`
-    ATP_PROC_RESULT send_packet(OutgoingPacket * out_pkt, bool flush_packets = true);
     ATP_PROC_RESULT close();
     bool writable() const;
     bool readable() const;
     void add_option(OutgoingPacket * out_pkt, uint8_t opt_kind, uint8_t opt_data_len, char * opt_data);
     void add_data(OutgoingPacket * out_pkt, const void * buf, const size_t len);
     size_t bytes_can_send_once() const;
-    size_t bytes_can_send_one_packet() const;
-    bool is_full() const {return bytes_can_send_once() == 0;}
+    size_t bytes_can_send_one_packet(OutgoingPacket * particular_packet = nullptr) const;
+    bool is_full(size_t with_extra = 0) const {
+        // This function test whether a packet of `with_extra` bytes will reduce window to 0
+        if (with_extra == 0) {
+            return bytes_can_send_once() == 0 && used_window_packets > cur_window_packets;
+        } else{
+            return bytes_can_send_once() < with_extra && used_window_packets + 1 > cur_window_packets;
+        }
+    }
     // this function returns immediately after the packet is sent(whether succeed or fail)
     ATP_PROC_RESULT write(const void * buf, const size_t len);
     ATP_PROC_RESULT write_oob(const void * buf, const size_t len, uint32_t timeout);
@@ -555,11 +586,11 @@ struct ATPSocket{
     OutgoingPacket * find_no_data_packet();
     // Fill data in a packet, return how many bytes are inserted. 
     // write -> fill_packet -> add_data
-    size_t fill_packet(OutgoingPacket * pkt, const char * buffer, size_t len);
+    size_t fill_packet(OutgoingPacket * out_pkt, const char * buffer, size_t len);
     // S->R
     void compute_clock_skew();
     // R->S
-    void compute_clock_skew(OutgoingPacket * recv_pkt);
+    void compute_clock_skew(const TimeDelayOption & delay_option);
     // get full sequence number according to **current** base
     uint32_t get_full_seq_nr(uint32_t raw_peer_seq_nr){
         return raw_peer_seq_nr + peer_seq_nr_base;
@@ -592,20 +623,8 @@ private:
 
 
 struct ATPContext{
-    void clear(){
-        for(ATPSocket * socket : sockets){
-            delete (socket);
-            socket = nullptr;
-        }
-        sockets.clear();
-        look_up.clear();
-        listen_sockets.clear();
-    }
-    void init(){
-        clear();
-        start_ms = get_current_ms();
-        std::srand(start_ms);
-    }
+    void clear();
+    void init();
 
     ATPContext(){
         init();
@@ -631,82 +650,14 @@ struct ATPContext{
     std::vector<ATPSocket *> destroyed_sockets;
     uint64_t start_ms;
 
-    uint16_t new_sock_id(){
-        uint16_t s = 0;
-        while(s == 0){
-            s = std::rand();
-        }
-        return s;
-    }
-
-    void destroy(ATPSocket * socket){
-        #if defined (ATP_LOG_AT_DEBUG)
-            log_debug(socket, "Context are destroying me. Goodbye. There are %u sockets left in the context including me", sockets.size());
-        #endif
-        auto iter = std::find(sockets.begin(), sockets.end(), socket);
-        sockets.erase(iter);
-        auto map_iter1 = look_up.find(socket->hash_code());
-        if (map_iter1 != look_up.end())
-        {
-            look_up.erase(map_iter1);
-        }
-        auto map_iter2 = listen_sockets.find(socket->get_local_addr().host_port());
-        if (map_iter2 != listen_sockets.end())
-        {
-            listen_sockets.erase(map_iter2);
-        }
-        delete socket;
-    }
-
-    ATP_PROC_RESULT daily_routine(){
-        // notify all exsiting sockets
-        // trigger1: once a message arrived
-        // trigger2: timeout
-        ATP_PROC_RESULT result = ATP_PROC_OK;
-        for(ATPSocket * socket: this->sockets){
-            ATP_PROC_RESULT sub_result = socket->check_timeout();
-            if (sub_result == ATP_PROC_ERROR)
-            {
-                result = ATP_PROC_ERROR;
-            }else if (sub_result == ATP_PROC_OK)
-            {
-                result = ATP_PROC_OK;
-            }else if (sub_result == ATP_PROC_FINISH)
-            {
-                // one socket calling on finish don't mean finishing
-                // because other sockets may still processing
-                result = ATP_PROC_OK;
-            }else{
-                result = ATP_PROC_OK;
-            }
-        } 
-        // clear destroyed sockets
-        for(ATPSocket * socket : destroyed_sockets){
-            this->destroy(socket);
-        }
-        destroyed_sockets.clear();
-        if (this->sockets.size() == 0 && this->destroyed_sockets.size() == 0)
-        {
-            #if defined (ATP_LOG_AT_DEBUG)
-                log_debug(this, "Context finished.");
-            #endif
-            // There's no sockets active
-            // Case 1: If ATP is built in an user program, user catchs the return value ATP_PROC_FINISH,
-            // if he has no other missions, he can destroy the context safely by calling `exit(0)`
-            // Case 2: If ATP is a service, user should not handle the return value ATP_PROC_FINISH,
-            return ATP_PROC_FINISH;
-        }else{
-            return result;
-        }
-    }
-
+    uint16_t new_sock_id();
+    void destroy(ATPSocket * socket);
+    ATP_PROC_RESULT daily_routine();
     ATPSocket * find_socket_by_fd(const ATPAddrHandle & handle_to, int sockfd);
     ATPSocket * find_socket_by_head(const ATPAddrHandle & handle_to, ATPPacket * pkt);
 };
 
 
-void print_out(ATPSocket * socket, OutgoingPacket * out_pkt, const char * method);
-
+void print_out(ATPSocket * socket, OutgoingPacket * out_pkt, const char * method, FILE * stream = nullptr);
 void init_callbacks(ATPSocket * socket);
-
 std::string tabber(const std::string & src, bool tail_crlf = true);

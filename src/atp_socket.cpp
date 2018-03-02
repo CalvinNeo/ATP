@@ -28,7 +28,6 @@ ATPSocket::ATPSocket(ATPContext * _context) : context(_context){
     sock_id = context->new_sock_id();
     conn_state = CS_UNINITIALIZED;
     memset(hash_str, 0, sizeof hash_str);
-
     memset(callbacks, 0, sizeof callbacks);
     init_callbacks(this);
 }
@@ -74,12 +73,12 @@ OutgoingPacket * ATPSocket::basic_send_packet(uint16_t flags){
         false, // marked
         false, // selective_acked
         false, // ahead_handled
+        false, // need_resend, update by `send_packet`/`check_unsend_packet`
         sizeof (ATPPacket), // length, update by `add_data`
         0, // payload, update by `add_data`/`add_option`
         0, // option_len, update by `add_option`
         0, // timestamp, set at `send_packet_noguard`
         0, // transmissions, update by `send_packet_noguard`
-        false, // need_resend, update by `send_packet`/`check_unsend_packet`
         seq_nr, // full_seq_nr, updated in send_packet
         reinterpret_cast<char *>(std::calloc(1, sizeof (ATPPacket))) // SYN packet will not contain data
     };
@@ -97,6 +96,17 @@ void ATPSocket::register_to_look_up(){
 }
 
 
+void ATPSocket::clear(){
+    for(OutgoingPacket * op : outbuf){
+        delete op;
+    }
+    outbuf.clear();
+    for(OutgoingPacket * op : inbuf){
+        delete op;
+    }
+    inbuf.clear();
+}
+    
 int ATPSocket::init(int family, int type, int protocol){
     conn_state = CS_IDLE;
     sockfd = socket(family, type, protocol);
@@ -281,10 +291,11 @@ ATP_PROC_RESULT ATPSocket::receive(OutgoingPacket * recv_pkt, size_t real_payloa
     }
 }
 
-ATP_PROC_RESULT ATPSocket::send_packet_noguard(OutgoingPacket * out_pkt){
+ATP_PROC_RESULT ATPSocket::send_packet_noguard(OutgoingPacket * out_pkt, bool adhoc){
+    // argument `adhoc`, which is usually set to false, is used by debuggers who can send simulated packets by `send_packet_noguard`
     uint64_t current_ms = get_current_ms();
     rto_timeout = current_ms + rto;
-    if (out_pkt->transmissions == 0 && out_pkt->is_promised_packet() && !out_pkt->get_head()->get_urg())
+    if (out_pkt->transmissions == 0 && out_pkt->is_promised_packet() && !out_pkt->get_head()->get_urg() && !adhoc)
     {
         used_window_packets++;
         used_window += out_pkt->payload;
@@ -296,19 +307,24 @@ ATP_PROC_RESULT ATPSocket::send_packet_noguard(OutgoingPacket * out_pkt){
             log_debug(this, "ATPPacket sent. seq:%u size:%u payload:%u.", out_pkt->get_head()->seq_nr, out_pkt->length, out_pkt->payload);
         }
     #endif
-    #if defined (ATP_LOG_AT_NOTE)
+    #if (defined (ATP_LOG_AT_NOTE)) || (defined (ATP_LOG_AT_DEBUG))
+        char b[32];
         if (out_pkt->transmissions == 0)
         {
             if(out_pkt->get_head()->get_urg()){
-                print_out(this, out_pkt, "urg");
+                sprintf(b, "urg");
             }else{
-                print_out(this, out_pkt, "snd");
+                sprintf(b, "snd");
             }
         }else{
-            char b[32];
-            sprintf(b, "re-snd[%u]", out_pkt->transmissions);
-            print_out(this, out_pkt, b);
+            sprintf(b, "snd[%u]", out_pkt->transmissions);
         }
+        #ifdef ATP_LOG_AT_NOTE
+        print_out(this, out_pkt, b);
+        #endif
+        #ifdef ATP_LOG_AT_DEBUG
+        print_out(this, out_pkt, b, stderr);
+        #endif
     #endif
     out_pkt->timestamp = current_ms;
     out_pkt->transmissions++;
@@ -334,44 +350,29 @@ void ATPSocket::check_unsend_packet(){
             // For most cases, need_resend will not be true, because currently delayed ACK checks before timeout check.
             if (out_pkt->is_empty_ack())
             {
-                // If delayed ack is enabled, an empty ACK packet is allowed to be sent later,
-                // and possibly attached with real data files
-                if(guess_full_seq_nr(out_pkt->get_head()->ack_nr) < ack_nr && !overflow_lock){
-                    // We don't send an obsolete empty ACK packet, can only be triggerred by Delayed ACK
-                }else{
-                    send_packet_noguard(out_pkt);
-                }
-                // In this case, mark all empty ACK without data, they will be deleted after sent, because  we don't resend empty ACK
-                out_pkt->marked = true;
-                marked_total++;
-            }else if(bytes_can_send_one_packet() >= out_pkt->payload){
+                #if defined (ATP_LOG_AT_DEBUG)
+                    // In previoud version if delayed ack is enabled, an empty ACK packet is allowed to be sent later
+                    // We don't send an empty packet with old ack_nr.
+                    // This can't happen now. Here also deleted some codes which mark all empty packets and then delete them
+                    bool cant_happen = guess_full_seq_nr(out_pkt->get_head()->ack_nr) < ack_nr && !overflow_lock;
+                    assert(!cant_happen);
+                #endif
+                send_packet_noguard(out_pkt);
+            }else if(out_pkt->transmissions > 0){
+                send_packet_noguard(out_pkt);
+            }else if(!is_full(out_pkt->payload)){
                 send_packet_noguard(out_pkt);
             }
         }
     }
-    // delete all marked packet
-    #if defined (ATP_LOG_AT_DEBUG)
-        log_debug(this, "Marked total:%d.", marked_total);
-    #endif
-    std::make_heap(outbuf.begin(), outbuf.end(), _cmp_outgoingpacket_marked());
-    while(!outbuf.empty()){
-        if (outbuf.back()->marked)
-        {
-            delete outbuf.back();
-            outbuf.pop_back();
-        }else{
-            break;
-        }
-    }
-    std::make_heap(outbuf.begin(), outbuf.end(), _cmp_outgoingpacket_fullseq());
     delay_ack_timeout = 0;
 }
 
-ATP_PROC_RESULT ATPSocket::send_packet(OutgoingPacket * out_pkt, bool flush_packets){
+ATP_PROC_RESULT ATPSocket::send_packet(OutgoingPacket * out_pkt, bool flush_packets, bool adhoc){
     ATP_PROC_RESULT result = ATP_PROC_OK;
     // setup packets
     // when the package is constructed, update `seq_nr` for the next package
-    if (out_pkt->is_promised_packet() > 0 && !out_pkt->need_resend)
+    if (out_pkt->is_promised_packet() && !out_pkt->need_resend)
     {
         // Only non-repeated packets with real user data(not including options) can have new seq number
         out_pkt->full_seq_nr ++;
@@ -379,7 +380,12 @@ ATP_PROC_RESULT ATPSocket::send_packet(OutgoingPacket * out_pkt, bool flush_pack
         (out_pkt->get_head()->seq_nr) &= seq_nr_mask;
         seq_nr ++;
     }
-    if(out_pkt->get_head()->get_urg()){
+    if(adhoc){
+        // argument `adhoc` functions the same as which in `send_packet_noguard`
+        result = send_packet_noguard(out_pkt, true);
+        return result;
+    }
+    else if(out_pkt->get_head()->get_urg()){
         // URG packets are always sent immediately
         result = send_packet_noguard(out_pkt);
         outbuf.push_back(out_pkt);
@@ -390,28 +396,13 @@ ATP_PROC_RESULT ATPSocket::send_packet(OutgoingPacket * out_pkt, bool flush_pack
         // if payload == 0 and is not FIN, can always send regradless of window
         if (out_pkt->is_empty_ack())
         {
-            if(ack_delayed_time != 0 && conn_state != CS_TIME_WAIT){
-                // Delay ACK is enabled
-                #if defined (ATP_LOG_AT_DEBUG)
-                    log_debug(this, "ATPPacket sent CACHED due to delayed ACK. seq:%u size:%u payload:%u."
-                        , out_pkt->get_head()->seq_nr, out_pkt->length, out_pkt->payload);
-                #endif
-                outbuf.push_back(out_pkt);
-                std::push_heap(outbuf.begin(), outbuf.end(), _cmp_outgoingpacket_fullseq());
-                uint64_t current_ms = get_current_ms();
-                if (delay_ack_timeout == 0)
-                {
-                    delay_ack_timeout = current_ms + ack_delayed_time;
-                }
-                result = ATP_PROC_OK;
-            }else{
-                // Delayed ACK is disabled, Send Empty ACK immediately
-                // ACK packet is ad-hoc sent, don't enqueue to outbuf
-                // if payload == 0(except SYN, FIN), can always delete at once
-                result = send_packet_noguard(out_pkt);
-                delete out_pkt;
-                out_pkt = nullptr;
-            }
+            // Send Empty ACK immediately
+            // ACK packet is ad-hoc sent, don't enqueue to outbuf(always delete at once(except SYN, FIN))
+            result = send_packet_noguard(out_pkt);
+            delete out_pkt;
+            out_pkt = nullptr;
+            // Cancel schedule_ack
+            delay_ack_timeout = 0;
         }else if(out_pkt->get_head()->get_syn()){
             // SYN Packet will always be sent immediately and pushed into `outbuf`
             result = send_packet_noguard(out_pkt);
@@ -431,11 +422,17 @@ ATP_PROC_RESULT ATPSocket::send_packet(OutgoingPacket * out_pkt, bool flush_pack
             log_debug(this, "ATPPacket sent CACHED due to window limit. seq:%u size:%u payload:%u."
                 , out_pkt->get_head()->seq_nr, out_pkt->length, out_pkt->payload);
         #endif
-        result = ATP_PROC_OK;
         outbuf.push_back(out_pkt);
         std::push_heap(outbuf.begin(), outbuf.end(), _cmp_outgoingpacket_fullseq());
     }
-    
+    if (out_pkt != nullptr)
+    {
+        // Cancel schedule_ack
+        assert(out_pkt->data != nullptr);
+        if(out_pkt->get_head()->get_ack()){
+            delay_ack_timeout = 0;
+        }
+    }
     return result;
 }
 
@@ -515,23 +512,30 @@ ATP_PROC_RESULT ATPSocket::close(){
 
 
 void ATPSocket::add_data(OutgoingPacket * out_pkt, const void * buf, const size_t len){
-    out_pkt->length += len;
-    out_pkt->payload += len;
+    (out_pkt->length) += len;
+    (out_pkt->payload) += len;
     assert(out_pkt->length == out_pkt->payload + sizeof(ATPPacket));
     out_pkt->data = reinterpret_cast<char *>(std::realloc(out_pkt->data, out_pkt->length));
     memcpy(out_pkt->data + (out_pkt->length - len), buf, len);
+    assert(out_pkt->data != nullptr);
 }
 
 void ATPSocket::add_option(OutgoingPacket * out_pkt, uint8_t opt_kind, uint8_t opt_data_len, char * opt_data){
     out_pkt->get_head()->opts_count++;
-    uint8_t total_opt_len = opt_data_len + sizeof(uint8_t) * 2;
-    out_pkt->data = reinterpret_cast<char *>(std::realloc(out_pkt->data, out_pkt->length + total_opt_len));
+    uint8_t opt_len = opt_data_len + sizeof(uint8_t) * 2;
+    size_t prev_opt_len = out_pkt->option_len;
+    out_pkt->data = reinterpret_cast<char *>(std::realloc(out_pkt->data, out_pkt->length + opt_len));
+    if (out_pkt->real_payload() != 0)
+    {
+        // If there is user data, must move them to make room for new options
+        std::memmove(out_pkt->data + sizeof(ATPPacket) + prev_opt_len + opt_len, out_pkt->data + sizeof(ATPPacket) + prev_opt_len, out_pkt->real_payload());
+    }
     *reinterpret_cast<uint8_t *>(out_pkt->data + out_pkt->length) = opt_kind;
     *reinterpret_cast<uint8_t *>(out_pkt->data + out_pkt->length + sizeof(uint8_t)) = opt_data_len;
     memcpy(out_pkt->data + out_pkt->length + sizeof(uint8_t) * 2, opt_data, opt_data_len);
-    out_pkt->length += total_opt_len;
-    out_pkt->payload += total_opt_len;
-    out_pkt->option_len += total_opt_len;
+    out_pkt->length += opt_len;
+    out_pkt->payload += opt_len;
+    out_pkt->option_len += opt_len;
     assert(out_pkt->length == out_pkt->payload + sizeof(ATPPacket));
     #if defined (ATP_LOG_AT_DEBUG)
         // fprintf(stderr, "Add option[%u], kind:%u, data_len:%u, payload:%u\n", out_pkt->get_head()->opts_count
@@ -604,14 +608,24 @@ bool ATPSocket::readable() const{
 }
 
 size_t ATPSocket::bytes_can_send_once() const {
-    if (cur_window < used_window)
+    if(cur_window == window_packets_unlimited){
+        // Notice cur_window is now uint16_t and we are supposed to return a size_t
+        // So we keep window_packets_unlimited to be int
+        return window_packets_unlimited;
+    }
+    else if (cur_window < used_window)
     {
+        // If window is already used up
         return 0;
     }
-    return std::min(cur_window - used_window, ATP_MAX_WRITE_BUFFER_SIZE);
+    return std::min(cur_window - used_window, MAX_ATP_PAYLOAD);
 }
-size_t ATPSocket::bytes_can_send_one_packet() const {
-    return std::min(bytes_can_send_once(), current_mss);
+size_t ATPSocket::bytes_can_send_one_packet(OutgoingPacket * particular_packet) const {
+    if(particular_packet == nullptr){
+        return std::min(bytes_can_send_once(), current_mss);
+    }else{
+        return current_mss - particular_packet->payload;
+    }
 }
 
 ATP_PROC_RESULT ATPSocket::write_oob(const void * buf, const size_t len, uint32_t timeout){
@@ -625,25 +639,11 @@ ATP_PROC_RESULT ATPSocket::write(const void * buf, const size_t len){
     if (!writable())
     {
         #if defined (ATP_LOG_AT_DEBUG)
-            log_debug(this, "ERROR: This socket can't write.");
-        #endif
-        return ATP_PROC_ERROR;
-    }
-    if (len > ATP_MAX_WRITE_BUFFER_SIZE)
-    {
-        #if defined (ATP_LOG_AT_DEBUG)
-            log_debug(this, "ERROR: Package reject because it's too big for ATP's writting buffer.");
+            log_debug(this, "ERROR: This socket is not writable.");
         #endif
         return ATP_PROC_ERROR;
     }
     // TODO improve here
-    if (len > bytes_can_send_once())
-    {
-        // If window restriction not satisfied 
-        #if defined (ATP_LOG_AT_DEBUG)
-            log_debug(this, "Window restricted, total %u, used %u, will only partially send, cache the rest.", cur_window, used_window);
-        #endif
-    }
     #if defined (ATP_LOG_AT_DEBUG)
         if (len > bytes_can_send_one_packet())
         {
@@ -653,11 +653,20 @@ ATP_PROC_RESULT ATPSocket::write(const void * buf, const size_t len){
     #endif
     size_t p = 0; int packet_id = 0;
     while(p < len){
-        size_t current_packet_payload_limit = bytes_can_send_one_packet();
+        if (bytes_can_send_once() == 0)
+        {
+            // If window restriction not satisfied 
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "Window restricted, total %u, used %u, will only partially send, cache the rest.", cur_window, used_window);
+            #endif
+            break;
+        }
+
+        // TODO reuse packets
         OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
-        
-        size_t new_length = std::min(current_packet_payload_limit, len - p);
-        add_data(out_pkt, buf + p, new_length);
+        size_t add_len = fill_packet(out_pkt, buf + p, len - p);
+
+        // Don't immediately emit packet here, flush them together.
         ATP_PROC_RESULT result = send_packet(out_pkt, false);
         if (result == ATP_PROC_ERROR)
         {
@@ -668,11 +677,12 @@ ATP_PROC_RESULT ATPSocket::write(const void * buf, const size_t len){
             return ATP_PROC_ERROR;
         }else{
             packet_id++;
-            p += new_length;
+            p += add_len;
         }
     }
+    // flush packets at the end
     check_unsend_packet();
-    // Successfully send `p` bytes of data
+    // Successfully sent `p` bytes of data
     return p;
 }
 
@@ -698,9 +708,7 @@ ATP_PROC_RESULT ATPSocket::check_fin(OutgoingPacket * recv_pkt){
             #if defined (ATP_LOG_AT_DEBUG)
                 log_debug(this, "Recv peer's FIN, Send the last ACK to Peer, Me still alive.");
             #endif
-            OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
-            send_packet(out_pkt);
-
+            schedule_ack();
             #if defined (ATP_LOG_AT_DEBUG)
                 log_debug(this, "Call ATP_CALL_ON_PEERCLOSE.");
             #endif
@@ -718,13 +726,14 @@ ATP_PROC_RESULT ATPSocket::check_fin(OutgoingPacket * recv_pkt){
             break;
         case CS_FIN_WAIT_2: // A
         {
+            // Receive FIN from peer
             conn_state = CS_TIME_WAIT;
             uint64_t current_ms = get_current_ms();
             death_timeout = current_ms + std::max(context->min_msl2, rto);
             #if defined (ATP_LOG_AT_DEBUG)
                 log_debug(this, "Recv peer's FIN, Send the last ACK to Peer, wait 2MSL from %u to %u.", current_ms, death_timeout);
             #endif
-
+            // Send no scheduled ACK
             OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
             result = send_packet(out_pkt);
 
@@ -738,6 +747,7 @@ ATP_PROC_RESULT ATPSocket::check_fin(OutgoingPacket * recv_pkt){
             #if defined (ATP_LOG_AT_DEBUG)
                 log_debug(this, "Peer resend FIN, send ack.");
             #endif
+            // Send no scheduled ACK
             OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
             result = send_packet(out_pkt);
             break;
@@ -748,6 +758,7 @@ ATP_PROC_RESULT ATPSocket::check_fin(OutgoingPacket * recv_pkt){
                 log_debug(this, "Peer resend FIN, send ack.");
             #endif
             death_timeout = current_ms + std::max(context->min_msl2, rto);
+            // Send no scheduled ACK
             OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
             result = send_packet(out_pkt);
             break;
@@ -771,7 +782,8 @@ uint32_t ATPSocket::guess_full_seq_nr(uint32_t raw_peer_seq){
     // e.g. when received sequence number is 1 and current ack_nr is 0xff, 
     // `1 - 0xff = 2` means the packet is 2 packets ahead of current ack.
     // However consider a old packet 0xfe, `0xfe - 0xff = 255` means the packet is 255 packets ahead of(in fact 1 packet behind) the current ack
-    // Though we can't tell the exact difference between ahead or behind
+    // Though we can't tell the exact difference between ahead or behind.
+    // The current method can judge whether a packet is ahead/behind, because we have base and full length ack_nr/seq_nr/peer_seq_nr
 
     uint32_t peer_seq = get_full_seq_nr(raw_peer_seq);
     // But if then we get a packet who somehow comes later, with an un-overflowed seq_nr?
@@ -822,6 +834,11 @@ uint32_t ATPSocket::guess_full_seq_nr(uint32_t raw_peer_seq){
         //  snd      504    SAO      65534          7      65534
         // drop     1505     AD          3       1462      65534
         // drop     1505     AD          4       1462      65534
+        uint32_t peer_seq_2 = peer_seq + (seq_nr_mask + 1);
+        if (ack_nr - peer_seq > peer_seq_2 - ack_nr)
+        {
+            peer_seq = peer_seq_2;
+        }
     }
     return peer_seq;
 }
@@ -838,18 +855,21 @@ ATP_PROC_RESULT ATPSocket::update_myack(OutgoingPacket * recv_pkt){
 
     uint32_t raw_peer_seq = recv_pkt->get_head()->seq_nr;
 
-    // When we met a 0, we know that peer's seq_nr wraps.
+    // When we meet a 0, we know that peer's seq_nr wraps.
     // e.g. If our `peer_seq_nr_base` is now 0, and we get a 0 seq_nr
-    // I understand the number overflowed. So I update `peer_seq_nr_base` to 256(0x100);
-    // NOTE that in some former version of ATP, code `raw_peer_seq < 5` is not correct.
-    // This is because in `handle_recv_packet`, code `!recv_pkt->is_empty_ack() && recv_pkt->get_head()->seq_nr == 0` will reset `overflow_lock` to false.
+    // I know the number overflowed. So I update `peer_seq_nr_base` to 256(0x100);
+    // NOTE that in some former version of ATP, code `raw_peer_seq < 5` is not correct. This is because in `handle_recv_packet`, condition `!recv_pkt-> ... ->seq_nr == 0` will reset `overflow_lock` to false.
+    // When overflow_lock == true, we received a packet 0
+    // When overflow_lock == false, we ACK that packet 0
     // Consider here comes packet 3, we set overflow_lock to true and cache this packet
     // then comes packet 0, and we can ack this packet, and overflow_lock is reset to false
     // then comes packet 1, it will cause another incorrect overflow
     if (raw_peer_seq == 0 && !overflow_lock && new_stage_hitted)
     {
         // peer's seq_nr wraps here
-        // new_stage_hitted is used to avoid repeated packet with srq_nr 0, consider:
+        // new_stage_hitted is used to avoid repeated packet with srq_nr 0.
+        // When new_stage_hitted is true, there is at least one packet received after packet 0.
+        // So we can handle duplicated 0 correctly. consider:
         //     rcv     2002     AD          0       1462      65534
         // rcv-ack     2002      A          0          0      65534
         //     rcv     2003     AD          1       1462      65534
@@ -857,11 +877,12 @@ ATP_PROC_RESULT ATPSocket::update_myack(OutgoingPacket * recv_pkt){
         //     snd     3002      A      65534          0          2
         //     snd     3002      A      65534          0          2
         uint32_t current_lowbit = ack_nr & seq_nr_mask;
-        if (current_lowbit - 0 > seq_nr_mask - current_lowbit)
+        // if (current_lowbit > seq_nr_mask - current_lowbit)
+        if (current_lowbit == seq_nr_mask)
         {
             peer_seq_nr_base += (seq_nr_mask + 1);
             #if defined (ATP_LOG_AT_DEBUG)
-                log_debug(this, "Seq_nr overflow to 0, current base %u(%x).", peer_seq_nr_base, peer_seq_nr_base);
+                log_debug(this, "seq_nr overflow to 0, current base %u(%x).", peer_seq_nr_base, peer_seq_nr_base);
             #endif
             // because there may be several packets which have seq_nr == 0(one with paylod, others don't)
             // only overflow once
@@ -922,13 +943,13 @@ ATP_PROC_RESULT ATPSocket::update_myack(OutgoingPacket * recv_pkt){
         if (peer_seq <= ack_nr){
             // this packet has already been acked, DROP!
             #if defined (ATP_LOG_AT_DEBUG)
-                log_debug(this, "This is an old raw_seq_nr:%u, seq_nr:%u, my_ack has already been:%u.", raw_peer_seq, peer_seq, ack_nr);
+                log_debug(this, "This is an old seq_nr:%u(%u), my_ack has already been:%u.", peer_seq, raw_peer_seq, ack_nr);
             #endif
             action = ATP_PROC_DROP;
         } 
         else if(peer_seq == ack_nr + 1){
             #if defined (ATP_LOG_AT_DEBUG)
-                log_debug(this, "This is a normal raw_seq_nr:%u, seq_nr:%u, my_ack is:%u.", raw_peer_seq, peer_seq, ack_nr);
+                log_debug(this, "This is a normal seq_nr:%u(%u), my_ack is:%u.", peer_seq, raw_peer_seq, ack_nr);
             #endif
             ack_nr ++;
             reorder_count = 0;
@@ -937,7 +958,7 @@ ATP_PROC_RESULT ATPSocket::update_myack(OutgoingPacket * recv_pkt){
             // there is at least one packet not acked before this packet, so we can't ack this
             reorder_count++;
             #if defined (ATP_LOG_AT_DEBUG)
-                log_debug(this, "This is an pre-arrived raw_seq_nr:%u, seq_nr:%u, my_ack is still:%u, reorder_count: %u.", raw_peer_seq, peer_seq, ack_nr, reorder_count);
+                log_debug(this, "This is a pre-arrived seq_nr:%u(%u), my_ack is still:%u, reorder_count: %u.", peer_seq, raw_peer_seq, ack_nr, reorder_count);
             #endif
             action = ATP_PROC_CACHE;
         }
@@ -1034,6 +1055,9 @@ size_t ATPSocket::handle_opt(OutgoingPacket * recv_pkt){
             case ATP_OPT_SOCKID:
             {
                 peer_sock_id = *reinterpret_cast<uint16_t *>(opt_dat_p);
+                #if defined (ATP_LOG_AT_DEBUG) 
+                    fprintf(stderr, "Peer set SOCKID to %u.\n", peer_sock_id);
+                #endif
                 break;
             }
             case ATP_OPT_MSS:
@@ -1051,8 +1075,14 @@ size_t ATPSocket::handle_opt(OutgoingPacket * recv_pkt){
             {
                 peer_max_sack_count = *reinterpret_cast<uint8_t*>(opt_dat_p);
                 #if defined (ATP_LOG_AT_DEBUG) 
-                    fprintf(stderr, "peer set SACK window to %u.\n", peer_max_sack_count);
+                    fprintf(stderr, "Peer set SACK window to %u.\n", peer_max_sack_count);
                 #endif
+                break;
+            }
+            case ATP_OPT_TIMESTAMP:
+            {
+                TimeDelayOption time_delay = *reinterpret_cast<TimeDelayOption*>(opt_dat_p);
+                compute_clock_skew(time_delay);
                 break;
             }
         }
@@ -1076,10 +1106,12 @@ ATP_PROC_RESULT ATPSocket::handle_recv_packet(OutgoingPacket * recv_pkt, bool fr
     ATP_PROC_RESULT action = update_myack(recv_pkt);
     do_ack_packet(recv_pkt);
     uint32_t peer_seq = guess_full_seq_nr(raw_peer_seq);
+    recv_pkt->full_seq_nr = peer_seq;
 
-    if (peer_max_sack_count > 0 && !from_cache && recv_pkt != nullptr)
+    if (peer_max_sack_count > 0 && !from_cache && recv_pkt != nullptr && reorder_count != 0)
     {
-        // selective ACK peer's paket
+        // If reorder_count == 0 then all packet come in order, there no need to send SACK
+        // selective ACK peer's packet
         OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
 
         // Find all packets
@@ -1174,21 +1206,19 @@ ATP_PROC_RESULT ATPSocket::handle_recv_packet(OutgoingPacket * recv_pkt, bool fr
         #if defined (ATP_LOG_AT_DEBUG)
             if (from_cache)
             {   
-                log_debug(this, "Drop packet from cache, my ack_nr:%u, peer_seq:%u.", ack_nr, peer_seq);
+                log_debug(this, "Drop packet from cache, my ack_nr:%u, peer_seq:%u, peer_seq_nr_base:%u.", ack_nr, peer_seq, peer_seq_nr_base);
             }else{
-                log_debug(this, "Drop packet, my ack_nr:%u, peer_seq:%u.", ack_nr, peer_seq);
+                log_debug(this, "Drop packet, my ack_nr:%u, peer_seq:%u, peer_seq_nr_base:%u.", ack_nr, peer_seq, peer_seq_nr_base);
             }
+            print_out(this, recv_pkt, "drop", stderr);
         #endif
         #if defined (ATP_LOG_AT_NOTE)
             print_out(this, recv_pkt, "drop");
-            // printf("Current ack_nr %u guess_full_seq_nr %u raw_peer_seq %u base %u\n",
-            //     ack_nr, guess_full_seq_nr(raw_peer_seq), raw_peer_seq, peer_seq_nr_base);
         #endif
         delete recv_pkt;
         recv_pkt = nullptr;
         // maybe peer has not receive my ACK, so it keep re-sending ACK
-        OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
-        send_packet(out_pkt);
+        schedule_ack();
         if (from_cache)
         {
             std::pop_heap(inbuf.begin(), inbuf.end(), _cmp_outgoingpacket());
@@ -1197,7 +1227,7 @@ ATP_PROC_RESULT ATPSocket::handle_recv_packet(OutgoingPacket * recv_pkt, bool fr
     }
     else if (action == ATP_PROC_OK)
     {
-        if (!recv_pkt->is_empty_ack() && recv_pkt->get_head()->seq_nr == 0)
+        if ((!recv_pkt->is_empty_ack()) && recv_pkt->get_head()->seq_nr == 0)
         {
             // The last packet before overflows has been acked. 
             // It doesn't means there will be no re-sent packet with seq_nr before overflow
@@ -1236,11 +1266,12 @@ ATP_PROC_RESULT ATPSocket::handle_recv_packet(OutgoingPacket * recv_pkt, bool fr
             }else{
                 log_debug(this, "Process a ATPPacket, peer_seq:%u, my ack_nr:%u.", peer_seq, ack_nr);
             }
+            print_out(this, recv_pkt, "rcv", stderr);
         #endif
         #if defined (ATP_LOG_AT_NOTE)
             if (recv_pkt->is_empty_ack())
             {
-                print_out(this, recv_pkt, "rcv-ack");
+                print_out(this, recv_pkt, "rcv");
             }else{
                 print_out(this, recv_pkt, "rcv");
             }
@@ -1257,7 +1288,8 @@ ATP_PROC_RESULT ATPSocket::handle_recv_packet(OutgoingPacket * recv_pkt, bool fr
         if (!from_cache)
         {
             // printf("peer_seq %u peer_seq_nr_base %u pkt base%u\n", peer_seq, peer_seq_nr_base, (peer_seq & seq_nr_mask));
-            if (overflow_lock && (peer_seq & (~seq_nr_mask)) >= peer_seq_nr_base)
+            // if (overflow_lock && (peer_seq & (~seq_nr_mask)) >= peer_seq_nr_base)
+            if(peer_seq > peer_seq_nr_base + seq_nr_mask)
             {
                 // cache into inbuf_cache2
                 auto repeated = std::find_if(inbuf_cache2.begin(), inbuf_cache2.end(), 
@@ -1394,7 +1426,6 @@ ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buff
 
         atp_callback_arguments arg = make_atp_callback_arguments(ATP_CALL_ON_ESTABLISHED, nullptr, dest_addr);
         result = invoke_callback(ATP_CALL_ON_ESTABLISHED, &arg);
-
         // send a ack even if there's no data immediately, in order to avoid timeout
         OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
         send_packet(out_pkt);
@@ -1480,7 +1511,6 @@ ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buff
             }
         }
     }
-
     if (last_handled_pkt != nullptr && last_handled_pkt->get_head()->get_fin())
     {
         result = check_fin(last_handled_pkt);
@@ -1489,9 +1519,7 @@ ATP_PROC_RESULT ATPSocket::process(const ATPAddrHandle & addr, const char * buff
     {
         // if ack_nr is updated, which means I read some packets from peer
         // remember: ACks are not acked, only data is acked.
-        // send an ack packet immediately.
-        OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
-        send_packet(out_pkt);
+        schedule_ack();
     }
     if (result == ATP_PROC_FINISH)
     {
@@ -1592,7 +1620,7 @@ ATP_PROC_RESULT ATPSocket::do_selective_ack_packet(char * peer_sack_data, uint8_
                     op_sgn = 'R';
                 #endif
             }else{
-                if(cur_pkt->transmissions > 0 && cur_pkt->is_promised_packet()){
+                if(cur_pkt->transmissions > 0 && cur_pkt->is_promised_packet() && !cur_pkt->get_head()->get_urg()){
                     // This is very important, ref `do_ack_packet`
                     #if defined (ATP_LOG_AT_DEBUG)
                         size_t pl = cur_pkt->payload;
@@ -1661,6 +1689,7 @@ ATP_PROC_RESULT ATPSocket::do_ack_packet(OutgoingPacket * recv_pkt){
         }
     }else if (calculated_peer_ack == my_seq_acked_by_peer){
         if (atp_frr_retries != 0){
+            // if fast retransmit is enabled
             if(atp_frr_retries == frr_counter && recv_pkt->has_user_data()){
 
             } else{
@@ -1686,7 +1715,7 @@ ATP_PROC_RESULT ATPSocket::do_ack_packet(OutgoingPacket * recv_pkt){
             {
                 
             }else{
-                if(out_pkt->transmissions > 0 && out_pkt->is_promised_packet()){
+                if(out_pkt->transmissions > 0 && out_pkt->is_promised_packet() && !out_pkt->get_head()->get_urg()){
                     // This is very important, because due to delayed ACK, 
                     // some packets in outbuf haven't yet been sent(by send_packet_noguard).
                     // used_window is increased in function send_packet_noguard
@@ -1737,14 +1766,21 @@ void ATPSocket::destroy(){
 
 ATP_PROC_RESULT ATPSocket::check_timeout(){
     uint64_t current_ms = get_current_ms();
+    // check delayed timeout
+    if (delay_ack_timeout != 0 && (int64_t)(current_ms - delay_ack_timeout) > 0)
+    {
+        // Delay ACK is enabled and timeout
+        OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
+
+        #if defined (ATP_LOG_AT_DEBUG)
+            log_debug(this, "Delayed ACK packet sent. seq:%u size:%u payload:%u."
+                , out_pkt->get_head()->seq_nr, out_pkt->length, out_pkt->payload);
+        #endif
+        send_packet(out_pkt);
+    }
     if (!outbuf.empty())
     {
         // If there is packet in outbuf
-        // check delayed timeout
-        if (delay_ack_timeout != 0 && (int64_t)(current_ms - delay_ack_timeout) > 0)
-        {
-            check_unsend_packet();
-        }
         // check resend timeout
         if (rto_timeout != 0 && (int64_t)(current_ms - rto_timeout) > 0)
         {
@@ -1788,12 +1824,7 @@ ATP_PROC_RESULT ATPSocket::check_timeout(){
                         }
                     }
                 }
-                for(OutgoingPacket * out_pkt : outbuf){
-                    if (out_pkt->need_resend)
-                    {
-                        send_packet_noguard(out_pkt);
-                    }
-                }
+                check_unsend_packet();
                 if (close_flag)
                 {
                     #if defined (ATP_LOG_AT_DEBUG)
@@ -1829,32 +1860,99 @@ ATP_PROC_RESULT ATPSocket::check_timeout(){
 
 void ATPSocket::compute_clock_skew(){
     // Initialize a probe
+    last_receive_timestamp = 0;
+    last_send_timestamp = get_current_ms();
+    TimeDelayOption delay_option{0, last_send_timestamp};
+    OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
+    add_option(out_pkt, ATP_OPT_TIMESTAMP, sizeof(delay_option), reinterpret_cast<char*>(&delay_option));
+    #if defined (ATP_LOG_AT_DEBUG)
+        log_debug(this, "Initialize a clock skew probing.");
+    #endif
+    send_packet_noguard(out_pkt);
+    delete out_pkt;
+    out_pkt = nullptr;
 }
 
-void ATPSocket::compute_clock_skew(OutgoingPacket * recv_pkt){
+void ATPSocket::compute_clock_skew(const TimeDelayOption & delay_option){
+    // T1: Originate Timestamp
+    // T2: Receive Timestamp
+    // T3: Transmit Timestamp
+    // T4: Destination Timestamp
+    if (last_send_timestamp == 0)
+    {
+        // B received an original probing packet from A to B
+        last_receive_timestamp = get_current_ms();
+        last_send_timestamp = last_receive_timestamp;
+        DelaySample delay_sample{delay_option.reply_timestamp, get_current_ms(), 0, 0};
+        TimeDelayOption delay_option{last_receive_timestamp, last_send_timestamp};
 
+        // Repeat immediately(current version)
+        // TODO reply packet can be resent, so some work should be move into `send_packet_noguard`
+        OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
+        add_option(out_pkt, ATP_OPT_TIMESTAMP, sizeof(delay_option), reinterpret_cast<char*>(&delay_option));
+        send_packet_noguard(out_pkt);
+        delete out_pkt;
+        out_pkt = nullptr;
+    }else{
+        // A received a responding packet from B back to A
+        DelaySample delay_sample{last_send_timestamp, delay_option.receive_timestamp, delay_option.reply_timestamp, get_current_ms()};
+        #if defined (ATP_LOG_AT_DEBUG)
+            log_debug(this, "Time drift between A & B is %lld T1:%lld T2:%lld T3:%lld T4:%lld."
+                , delay_sample.get_drift(), delay_sample.t1, delay_sample.t2, delay_sample.t3, delay_sample.t4);
+        #endif
+    }
 }
 
 OutgoingPacket * ATPSocket::find_no_data_packet(){
     return nullptr;
 }
 
-size_t ATPSocket::fill_packet(OutgoingPacket * pkt, const char * buffer, size_t len){
-    if (pkt->payload == 0)
+size_t ATPSocket::fill_packet(OutgoingPacket * out_pkt, const char * buffer, size_t len){
+    // return how many bytes are inserted. 
+    if (out_pkt->payload == 0)
     {
-        // carry no payload
-    }else if (!pkt->has_user_data()){
-        // carry only option payload
+        // carry no payload, change into packet with data
+    }else if (!out_pkt->has_user_data()){
+        // carry only option payload, change into packet with data
     }else{
-        // carry user data
+        // carry user data, then append
     }
-    return 0;
+
+    size_t current_packet_payload_limit = bytes_can_send_one_packet(out_pkt);
+    size_t new_length = std::min({current_packet_payload_limit, len});
+    // add/append buffer to the packet by length of `new_length`
+    add_data(out_pkt, buffer, new_length);
+    return new_length;
 }
 
 void ATPSocket::update_window(uint16_t new_peer_window){
-
+    peer_window = new_peer_window;
+    cur_window = peer_window;
 }
 
 void ATPSocket::schedule_ack(){
-
+    if (ack_delayed_time != 0 && conn_state != CS_TIME_WAIT)
+    {
+        // Delayed ACK is enabled
+        uint64_t current_ms = get_current_ms();
+        if (delay_ack_timeout == 0 || delay_ack_timeout < current_ms)
+        {
+            delay_ack_timeout = current_ms + ack_delayed_time;
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "ACK packet scheduled at %llu, now %llu.", delay_ack_timeout, current_ms);
+            #endif
+        }else{
+            #if defined (ATP_LOG_AT_DEBUG)
+                log_debug(this, "ACK packet already scheduled at %llu after %llu, now %llu.", delay_ack_timeout - current_ms, delay_ack_timeout, current_ms);
+            #endif
+        }
+    }else{
+        // Delayed ACK is disabled
+        OutgoingPacket * out_pkt = basic_send_packet(ATPPacket::create_flags(PACKETFLAG_ACK));
+        #if defined (ATP_LOG_AT_DEBUG)
+            log_debug(this, "ACK packet sent(no delay). seq:%u size:%u payload:%u."
+                , out_pkt->get_head()->seq_nr, out_pkt->length, out_pkt->payload);
+        #endif
+        send_packet(out_pkt);
+    }
 }

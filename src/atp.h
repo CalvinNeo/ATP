@@ -32,6 +32,9 @@ extern "C" {
 enum atp_api_options{
     ATP_API_SACKOPT,
     ATP_API_SOCKID,
+    ATP_API_STATUS,
+    ATP_API_WRITABLE,
+    ATP_API_READABLE
 };
 
 atp_context * atp_create_server_context();
@@ -45,7 +48,7 @@ atp_result atp_connect(atp_socket * socket, const struct sockaddr * to, socklen_
 atp_result atp_async_accept(atp_socket * socket, const struct sockaddr * to, socklen_t tolen);
 atp_result atp_accept(atp_socket * socket);
 atp_result atp_write(atp_socket * socket, void * buf, size_t length);
-atp_result atp_write_oob(atp_socket * socket, void * buf, size_t length);
+atp_result atp_write_oob(atp_socket * socket, void * buf, size_t length, uint32_t timeout);
 atp_result atp_process_udp(atp_context * context, int sockfd, const char * buf, size_t len, const struct sockaddr * to, socklen_t tolen);
 atp_result atp_timer_event(atp_context * context, uint64_t interval);
 atp_result atp_close(atp_socket * socket);
@@ -57,6 +60,8 @@ atp_result atp_sending_status(atp_socket * socket);
 bool atp_destroyed(atp_socket * socket);
 void atp_set_long(atp_socket * socket, size_t option, size_t value);
 size_t atp_get_long(atp_socket * socket, size_t option);
+
+struct TestClass * get_test_class();
 
 #ifdef __cplusplus
 }

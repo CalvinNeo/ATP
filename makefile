@@ -11,14 +11,13 @@ OBJ_ROOT = $(BIN_ROOT)/obj
 SRCS = $(wildcard $(SRC_ROOT)/*.cpp)
 OBJS = $(patsubst $(SRC_ROOT)%, $(OBJ_ROOT)%, $(patsubst %cpp, %o, $(SRCS)))
 
-
 lib: $(BIN_ROOT)/libatp.so $(BIN_ROOT)/libatp.a
 
 all: demos
 
 demo: recv send 
 demo_file: sendfile recvfile 
-demo_poll: sendfile_poll recv
+demo_poll: sendfile_poll recvfile
 
 demos: CFLAGS_COV = 
 demos: CFLAGS_COV_LNK = 
@@ -26,7 +25,7 @@ demos: lib demo demo_file demo_poll
 
 demos_cov: CFLAGS_COV = -fprofile-arcs -ftest-coverage -fno-inline -DATP_LOG_AT_NOTE -DATP_LOG_AT_DEBUG -DATP_LOG_UDP -DATP_DEBUG_TEST_OVERFLOW
 demos_cov: CFLAGS_COV_LNK = -fprofile-arcs -ftest-coverage --coverage -fno-inline -DATP_LOG_AT_NOTE -DATP_LOG_AT_DEBUG -DATP_LOG_UDP -DATP_DEBUG_TEST_OVERFLOW
-demos_cov: lib demo_file packet_sim demo_poll
+demos_cov: lib demo_file packet_sim demo_poll demo
 
 # use bash's `&` and wait cause trouble here, refer to earlier commits
 run_test:
@@ -52,16 +51,16 @@ buffer_test:
 	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/buffer_test $(SRC_ROOT)/test/buffer_test.cpp -L/usr/lib/ $(BIN_ROOT)/libatp.a
 
 recv: 
-	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/recv $(SRC_ROOT)/test/recv.cpp -L/usr/lib/ $(BIN_ROOT)/libatp.a
+	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/recv $(SRC_ROOT)/test/recv.cpp -L/usr/lib/ -lpthread $(BIN_ROOT)/libatp.a
 
 send: 
-	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/send $(SRC_ROOT)/test/send.cpp -L/usr/lib/ $(BIN_ROOT)/libatp.a
+	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/send $(SRC_ROOT)/test/send.cpp -L/usr/lib/ -lpthread $(BIN_ROOT)/libatp.a
 
 sendfile_test: 
-	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/sendfile_test $(SRC_ROOT)/test/sendfile_test.cpp 
+	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/sendfile_test $(SRC_ROOT)/test/sendfile_test.cpp $(TEST_UTILS)
 
 sendfile_poll: 
-	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/sendfile_poll $(SRC_ROOT)/test/sendfile_poll.cpp $(OBJS) -L/usr/lib/ -lpthread $(BIN_ROOT)/libatp.a
+	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/sendfile_poll $(SRC_ROOT)/test/sendfile_poll.cpp -L/usr/lib/ -lpthread $(BIN_ROOT)/libatp.a
 
 sendfile: 
 	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/sendfile $(SRC_ROOT)/test/sendfile.cpp -L/usr/lib/ -lpthread $(BIN_ROOT)/libatp.a
@@ -73,7 +72,7 @@ send_aio:
 	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/send_aio $(SRC_ROOT)/test/send_aio.cpp -L/usr/lib/ -lrt -lpthread $(BIN_ROOT)/libatp.a
 
 packet_sim: 
-	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/packet_sim $(SRC_ROOT)/test/packet_sim.cpp -L/usr/lib/ $(BIN_ROOT)/libatp.a
+	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/packet_sim $(SRC_ROOT)/test/packet_sim.cpp -L/usr/lib/ -lpthread $(BIN_ROOT)/libatp.a
 
 $(BIN_ROOT)/libatp.so: $(OBJS)
 	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/libatp.so -shared $(OBJS)
@@ -94,6 +93,10 @@ clean: clean_cov
 .PHONY: clc
 clc:
 	rm -f core
+	rm -f s.log
+	rm -f s1.log
+	rm -f r.log
+	rm -f r1.log
 .PHONY: clean_cov
 clean_cov:
 	find ./ -name "*.info" -delete
@@ -102,3 +105,7 @@ clean_cov:
 	find ./ -name "*.gcno" -delete
 	rm -rf ./ATPLCovHTML
 	rm -f *.log
+.PHONY: kill
+kill:
+	ps aux | grep -e send | grep -v grep | awk '{print $$2}' | xargs -i kill {}
+	ps aux | grep -e recv | grep -v grep | awk '{print $$2}' | xargs -i kill {}

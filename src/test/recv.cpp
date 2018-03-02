@@ -19,6 +19,7 @@
 */
 #include "../atp.h"
 #include "../udp_util.h"
+#include "test.inc.h"
 #include <iostream>
 
 ATP_PROC_RESULT data_arrived(atp_callback_arguments * args){
@@ -30,14 +31,30 @@ ATP_PROC_RESULT data_arrived(atp_callback_arguments * args){
     return ATP_PROC_OK;
 }
 
-int main(){
+int main(int argc, char* argv[], char* env[]){
     uint16_t serv_port = 9876;
     struct sockaddr_in cli_addr; socklen_t cli_len = sizeof(cli_addr);
     struct sockaddr_in srv_addr;
 
     char msg[ATP_MAX_READ_BUFFER_SIZE];
     int n;
+    bool simulate_packet = false;
+    int oc;
 
+    while((oc = getopt(argc, argv, "p:s")) != -1)
+    {
+        switch(oc)
+        {
+        case 'p':
+            sscanf(optarg, "%u", &serv_port);
+            break;
+        case 's':
+            simulate_packet = true;
+            break;
+        }
+    }
+
+    reg_sigterm_handler(sigterm_handler);
     atp_context * context = atp_create_context();
     atp_socket * socket = atp_create_socket(context);
     int sockfd = atp_getfd(socket);
@@ -52,7 +69,6 @@ int main(){
     if(atp_accept(socket) != ATP_PROC_OK){
         puts("Connection Abort.");
     }
-
     while (true) {
         sockaddr * pcli_addr = (SA *)&cli_addr;
 

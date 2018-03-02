@@ -8,7 +8,7 @@ As is discussed in ACK flag, ATP uses the `ACK` flag to acknowledge packets with
 Use function `OutgoingPacket::is_promised_packet` to check whether a packet can be re-sent. Basicly, ATP only resend the following packets:
 
 1. Packets with SYN/FIN flags
-
+	
 	SYN and FIN are important control message thus they should always been re-sent until acknowledged.
 
 2. Packets with user data

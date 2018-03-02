@@ -19,21 +19,17 @@
 */
 #include "../atp.h"
 #include "../udp_util.h"
-#include "test.h"
+#include "test.inc.h"
 #include "../atp_impl.h"
 #include <unistd.h>
 
 void activate_nonblock(int fd)
 {
-    int ret;
     int flags = fcntl(fd, F_GETFL);
-    if (flags == -1)
-        err_sys("fcntl");
-    flags |= O_NONBLOCK;
-    ret = fcntl(fd, F_SETFL, flags);
-    if (ret == -1)
-        err_sys("fcntl");
+    if (flags == -1) err_sys("fcntl");
+    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) err_sys("fcntl");
 }
+
 
 int main(int argc, char* argv[], char* env[]){
     int oc;
@@ -77,6 +73,7 @@ int main(int argc, char* argv[], char* env[]){
     char ipaddr_str[INET_ADDRSTRLEN];
     int n;
 
+    reg_sigterm_handler(sigterm_handler);
     atp_context * context = atp_create_context();
     atp_socket * socket = atp_create_socket(context);
     int sockfd = atp_getfd(socket);
@@ -98,13 +95,14 @@ int main(int argc, char* argv[], char* env[]){
     atp_async_connect(socket, (const SA *)&srv_addr, sizeof srv_addr);
 
     FILE * fin = fopen(input_file_name, "rb");
+    FileObject fin_obj {fin, ATP_MIN_BUFFER_SIZE};
     int fd_in = fileno(fin);
 
     struct pollfd pfd[3];
     bool stdin_hup = false;
     while (true) {
         pfd[0].fd = fd_in;
-        pfd[0].events = feof(fin) ? 0: POLLIN;
+        pfd[0].events = fin_obj.eof() ? 0: POLLIN;
 
         pfd[1].fd = sockfd;
         pfd[1].events = POLLIN;
@@ -116,7 +114,7 @@ int main(int argc, char* argv[], char* env[]){
             stdin_hup = true;
             printf("stdin closed %llu\n", get_current_ms());
         }
-        if(feof(fin) && stdin_hup){
+        if(fin_obj.eof() && stdin_hup){
             printf("all closed %llu\n", get_current_ms());
             atp_close(socket);
             break;
@@ -135,11 +133,16 @@ int main(int argc, char* argv[], char* env[]){
         }
         else {
             if ((pfd[0].revents & POLLIN) == POLLIN) {
-                n = fread(&send_msg, 1, ATP_MIN_BUFFER_SIZE, fin);
-                if(n == 0){
+                char * buffer = fin_obj.get(n);
+                if(n == 0 || !atp_get_long(socket, ATP_API_WRITABLE)){
 
                 }else{
-                    atp_write(socket, send_msg, n);
+                    atp_result r = atp_write(socket, buffer, n);
+                    if (r > 0)
+                    {
+                        // r == 0 or r < 0 means error
+                        fin_obj.ack_by_n(r);
+                    }
                 }
             }
             if ((pfd[1].revents & POLLIN) == POLLIN) {
@@ -154,17 +157,21 @@ int main(int argc, char* argv[], char* env[]){
             }
             if ((pfd[2].revents & POLLIN) == POLLIN) {
                 // n = fread(&send_msg, 1, ATP_MIN_BUFFER_SIZE, stdin);
-                n = fgets(send_msg, ATP_MIN_BUFFER_SIZE, stdin);
-                if(n == 0 || n == EOF){
-
+                n = fread(&send_msg, 1, ATP_MIN_BUFFER_SIZE, stdin);
+                if(n == 0){
+                    if(feof(stdin)){
+                        stdin_hup = true;
+                    }
                 }else{
-                    printf("send urg data: %.*s \n", n, send_msg);
+                    printf("send urg data[%u]: %.*s \n", n, n, send_msg);
+                    // The urgent message is request to be sent to peer within 1000ms
+                    atp_write_oob(socket, send_msg, n, 1000);
                     fflush(stdin);
                     fflush(stdout);
                 }
             }else if((pfd[2].revents & POLLHUP) == POLLHUP){
                 stdin_hup = true;
-                printf("stdin hup %llu\n", get_current_ms());
+                printf("stdin hup at time %llu\n", get_current_ms());
             }
         }
     }

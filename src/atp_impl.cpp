@@ -54,127 +54,7 @@ std::string tabber(const std::string & src, bool tail_crlf) {
     return ans;
 }
 
-void _log_doit1(ATPSocket * socket, char const * func_name, int line, int level, char const * fmt, va_list va){
-    char new_fmt[1024];
-    std::snprintf(new_fmt, 1024, "[Socket %s] %s at func[%s:%d] \n<syserr %d: %s>\n\t%s\n"
-        , socket->to_string(), CONN_STATE_STRS[socket->conn_state], func_name, line, errno, strerror(errno), fmt);
-    char buf[4096];
-    vsnprintf(buf, 4096, new_fmt, va);
-    fflush(stdout);
-    switch(level){
-        case LOGLEVEL_FATAL:
-            std::fprintf(stderr, buf);
-            break;
-        case LOGLEVEL_DEBUG:
-            std::fprintf(stderr, buf);
-            break;
-        case LOGLEVEL_NOTE:
-            std::fprintf(stdout, buf);
-            break;
-    }
-    fflush(stderr);
-}
-void _log_doit1(ATPContext * context, char const* func_name, int line, int level, char const * fmt, va_list va){
-    char new_fmt[1024];
-    std::snprintf(new_fmt, 1024, "[Context] at func[%s:%d] \n<syserr %d: %s>\n\t%s\n", func_name, line, errno, strerror(errno), fmt);
-    char buf[4096];
-    vsnprintf(buf, 4096, new_fmt, va);
-    fflush(stdout);
-    switch(level){
-        case LOGLEVEL_FATAL:
-            std::fprintf(stderr, buf);
-            break;
-        case LOGLEVEL_DEBUG:
-            std::fprintf(stderr, buf);
-            break;
-        case LOGLEVEL_NOTE:
-            std::fprintf(stdout, buf);
-            break;
-    }
-    fflush(stderr);
-}
-
-void log_fatal2(std::function<void(ATPSocket *, char const *, va_list)> f, ATPSocket * socket, char const *fmt, ...){
-    va_list va;
-    va_start(va, fmt);
-    f(socket, fmt, va);
-    va_end(va);
-    exit(1);
-}
-void log_debug2(std::function<void(ATPSocket *, char const *, va_list)> f, ATPSocket * socket, char const *fmt, ...){
-    va_list va;
-    va_start(va, fmt);
-    f(socket, fmt, va);
-    va_end(va);
-}
-void log_note2(std::function<void(ATPSocket *, char const *, va_list)> f, ATPSocket * socket, char const *fmt, ...){
-    va_list va;
-    va_start(va, fmt);
-    f(socket, fmt, va);
-    va_end(va);
-}
-void log_fatal2(std::function<void(ATPContext *, char const *, va_list)> f, ATPContext * context, char const *fmt, ...){
-    va_list va;
-    va_start(va, fmt);
-    f(context, fmt, va);
-    va_end(va);
-    exit(1);
-}
-void log_debug2(std::function<void(ATPContext *, char const *, va_list)> f, ATPContext * context, char const *fmt, ...){
-    va_list va;
-    va_start(va, fmt);
-    f(context, fmt, va);
-    va_end(va);
-}
-void log_note2(std::function<void(ATPContext *, char const *, va_list)> f, ATPContext * context, char const *fmt, ...){
-    va_list va;
-    va_start(va, fmt);
-    f(context, fmt, va);
-    va_end(va);
-}
-
-
-void log_fatal1(ATPSocket * socket, char const *fmt, ...){
-    va_list va;
-    va_start(va, fmt);
-    _log_doit(socket, "", 0, LOGLEVEL_FATAL, fmt, va);
-    va_end(va);
-    exit(1);
-}
-void log_debug1(ATPSocket * socket, char const *fmt, ...){
-    va_list va;
-    va_start(va, fmt);
-    _log_doit(socket, "", 0, LOGLEVEL_DEBUG, fmt, va);
-    va_end(va);
-}
-void log_note1(ATPSocket * socket, char const *fmt, ...){
-    va_list va;
-    va_start(va, fmt);
-    _log_doit(socket, "", 0, LOGLEVEL_NOTE, fmt, va);
-    va_end(va);
-}
-void log_fatal1(ATPContext * context, char const *fmt, ...){
-    va_list va;
-    va_start(va, fmt);
-    _log_doit(context, "", 0, LOGLEVEL_FATAL, fmt, va);
-    va_end(va);
-    exit(1);
-}
-void log_debug1(ATPContext * context, char const *fmt, ...){
-    va_list va;
-    va_start(va, fmt);
-    _log_doit(context, "", 0, LOGLEVEL_DEBUG, fmt, va);
-    va_end(va);
-}
-void log_note1(ATPContext * context, char const *fmt, ...){
-    va_list va;
-    va_start(va, fmt);
-    _log_doit(context, "", 0, LOGLEVEL_NOTE, fmt, va);
-    va_end(va);
-}
-
-void print_out(ATPSocket * socket, OutgoingPacket * out_pkt, const char * method){
-    static bool flag = false;
+static std::string OutgoingPacket::get_flags_str(OutgoingPacket const * out_pkt) {
     ATPPacket * pkt = out_pkt->get_head();
     std::string type;
     if (pkt->get_syn())
@@ -205,16 +85,92 @@ void print_out(ATPSocket * socket, OutgoingPacket * out_pkt, const char * method
     {
         type += "D";
     }
-    if (!flag)
-    {
-        flag = true;
-        fprintf(stdout, "%10s %8s %6s %10s %10s %10s\n"
-            , "method", "ts", "flag", "seq", "payload", "ack");
-    }
-    fprintf(stdout, "%10s %8lld %6s %10u %10u %10u\n"
-        , method, (long long)(get_current_ms() - socket->context->start_ms), type.c_str(), pkt->seq_nr, out_pkt->payload, pkt->ack_nr);
+    return type;
 }
 
+void ATPContext::clear(){
+    for(ATPSocket * socket : sockets){
+        delete (socket);
+        socket = nullptr;
+    }
+    sockets.clear();
+    look_up.clear();
+    listen_sockets.clear();
+}
+void ATPContext::init(){
+    clear();
+    start_ms = get_current_ms();
+    std::srand(start_ms);
+}
+
+uint16_t ATPContext::new_sock_id(){
+    uint16_t s = 0;
+    while(s == 0){
+        s = std::rand();
+    }
+    return s;
+}
+
+void ATPContext::destroy(ATPSocket * socket){
+    #if defined (ATP_LOG_AT_DEBUG)
+        log_debug(socket, "Context are destroying me. Goodbye. There are %u sockets left in the context including me", sockets.size());
+    #endif
+    auto iter = std::find(sockets.begin(), sockets.end(), socket);
+    sockets.erase(iter);
+    auto map_iter1 = look_up.find(socket->hash_code());
+    if (map_iter1 != look_up.end())
+    {
+        look_up.erase(map_iter1);
+    }
+    auto map_iter2 = listen_sockets.find(socket->get_local_addr().host_port());
+    if (map_iter2 != listen_sockets.end())
+    {
+        listen_sockets.erase(map_iter2);
+    }
+    delete socket;
+}
+    
+ATP_PROC_RESULT ATPContext::daily_routine(){
+    // notify all exsiting sockets
+    // trigger1: once a message arrived
+    // trigger2: timeout
+    ATP_PROC_RESULT result = ATP_PROC_OK;
+    for(ATPSocket * socket: this->sockets){
+        ATP_PROC_RESULT sub_result = socket->check_timeout();
+        if (sub_result == ATP_PROC_ERROR)
+        {
+            result = ATP_PROC_ERROR;
+        }else if (sub_result == ATP_PROC_OK)
+        {
+            result = ATP_PROC_OK;
+        }else if (sub_result == ATP_PROC_FINISH)
+        {
+            // one socket calling on finish won't finish the context,
+            // because other sockets may still be alive
+            result = ATP_PROC_OK;
+        }else{
+            result = ATP_PROC_OK;
+        }
+    } 
+    // clear destroyed sockets
+    for(ATPSocket * socket : destroyed_sockets){
+        this->destroy(socket);
+    }
+    destroyed_sockets.clear();
+    if (this->sockets.size() == 0 && this->destroyed_sockets.size() == 0)
+    {
+        #if defined (ATP_LOG_AT_DEBUG)
+            log_debug(this, "Context finished.");
+        #endif
+        // There's no sockets active
+        // Case 1: If ATP is built in an user program, user catchs the return value ATP_PROC_FINISH,
+        // if he has no other missions, he can destroy the context safely by calling `exit(0)`
+        // Case 2: If ATP is a service, user should not handle the return value ATP_PROC_FINISH,
+        return ATP_PROC_FINISH;
+    }else{
+        return result;
+    }
+}
 
 ATPSocket * ATPContext::find_socket_by_fd(const ATPAddrHandle & handle_to, int sockfd){
     // find in listen

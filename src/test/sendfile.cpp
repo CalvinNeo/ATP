@@ -19,7 +19,7 @@
 */
 #include "../atp.h"
 #include "../udp_util.h"
-#include "test.h"
+#include "test.inc.h"
 #include <unistd.h>
 
 int main(int argc, char* argv[], char* env[]){
@@ -61,6 +61,7 @@ int main(int argc, char* argv[], char* env[]){
     char recv_msg[ATP_MAX_READ_BUFFER_SIZE];
     int n;
 
+    reg_sigterm_handler(sigterm_handler);
     atp_context * context = atp_create_context();
     atp_socket * socket = atp_create_socket(context);
     if(sock_id != 0){atp_set_long(socket, ATP_API_SOCKID, sock_id); }

@@ -20,14 +20,13 @@
 #include "../atp.h"
 #include "../udp_util.h"
 #include "../atp_impl.h"
-#include "test.h"
+#include "test.inc.h"
 
 // This program simulates a ATPPacket
 
-char cmd[2000]; 
-char outbuf[5000];
 int main(int argc, char* argv[], char* env[]){
-    int oc;char *pch = nullptr;
+    int oc; char *pch = nullptr;
+    char cmd[2000]; 
     uint16_t seq_nr; 
     uint16_t ack_nr;
     uint16_t peer_sock_id; 
@@ -35,11 +34,7 @@ int main(int argc, char* argv[], char* env[]){
     uint16_t window_size;
     uint16_t port;
     uint16_t src_port = 0;
-    // if(argc > 1){
-    //     for(int i = 1; i < argc; i++){
-    //         printf("arg %d is %s\n", i, argv[i]);
-    //     }
-    // }
+
     while((oc = getopt(argc, argv, "s:a:i:o:f:w:O:d:p:P:")) != -1)
     {
         switch(oc)
@@ -110,31 +105,17 @@ int main(int argc, char* argv[], char* env[]){
             break;
         }
     }
-    size_t length = 0;
-    ATPPacket pkt = ATPPacket{
-        seq_nr, // seq_nr, updated in send_packet
-        ack_nr, // ack_nr
-        peer_sock_id, // peer_sock_id
-        opts_count,// opts_count
-        flags, // flags
-        window_size // my window
-    };
-    memcpy(outbuf, &pkt, sizeof(ATPPacket));
-    length += sizeof(ATPPacket);
 
-    struct sockaddr_in addr; socklen_t addr_len = sizeof(addr);
-    addr = make_socketaddr_in(AF_INET, "127.0.0.1", port);
-    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    
-    if(src_port != 0){
-        struct sockaddr_in my_addr = make_socketaddr_in(AF_INET, "127.0.0.1", src_port); 
-        if (bind(sockfd, (SA *) &my_addr, sizeof my_addr) < 0)
-            err_sys("bind error");
-    }
-    
-    int n = sendto(sockfd, outbuf, length, 0, (const SA *)(&addr), addr_len);
+    int n = send_simulated_packet(
+        seq_nr,
+        ack_nr,
+        peer_sock_id,
+        opts_count, flags,
+        window_size,
+        port,
+        src_port);
 
-    if(n != length){
+    if(n == -1){
         printf("Error. errno: %u, %s\n", errno, strerror(errno));
     }else{
         puts("Succeed.");
