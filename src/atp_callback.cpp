@@ -87,5 +87,7 @@ void init_callbacks(ATPSocket * socket){
         return ATP_PROC_FINISH;
     };
     socket->callbacks[ATP_CALL_ON_URG_TIMEOUT] = nullptr;
+    socket->callbacks[ATP_CALL_BEFORE_REP_ACCEPT] = nullptr;
+    socket->callbacks[ATP_CALL_ON_FORK] = nullptr;
 }
 

@@ -52,7 +52,7 @@ enum CONN_STATE_ENUM {
 
     CS_FIN_WAIT_1, // A
 
-    // this is half cloded state. B got A's is fin, and will not send data.
+    // This is half cloded state. B got A's is fin, and will not send data.
     // But B can still send data, then A can send ack in response
     CS_CLOSE_WAIT, // B
 
@@ -61,10 +61,13 @@ enum CONN_STATE_ENUM {
 
     // B sent his fin
     CS_LAST_ACK, // B
-    // the end of side A, wait 2 * MSL and then goto CS_DESTROY
+    // The end of side A, wait 2 * MSL and then goto CS_DESTROY
     CS_TIME_WAIT,
-    // the end of side B
+    // The end of side B
     CS_DESTROY,
+
+    // When a socket at listening port is disconnect, its state goes to CS_PASSIVE_LISTEN rather than CS_DESTROY
+    CS_PASSIVE_LISTEN,
 
     CS_STATE_COUNT
 };
@@ -105,6 +108,8 @@ enum ATP_CALLBACKTYPE_ENUM{
     ATP_CALL_ON_PEERCLOSE,
     ATP_CALL_ON_DESTROY,
     ATP_CALL_ON_URG_TIMEOUT,
+    ATP_CALL_BEFORE_REP_ACCEPT,
+    ATP_CALL_ON_FORK,
 
     ATP_CALLBACK_SIZE, // must be the last
 };

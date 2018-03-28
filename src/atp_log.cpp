@@ -150,12 +150,12 @@ void print_out(ATPSocket * socket, OutgoingPacket * out_pkt, const char * method
     if (!flag)
     {
         flag = true;
-        fprintf(stdout, "%10s %8s %6s %10s %10s %10s\n"
-            , "method", "ts", "flag", "seq", "payload", "ack");
+        fprintf(stdout, "%10s %6s %8s %6s %10s %10s %10s\n"
+            , "method", "sockid", "time", "flag", "seq", "payload", "ack");
     }
     if(stream == nullptr){
         stream = stdout;
     }
-    fprintf(stream, "%10s %8lld %6s %10u %10u %10u\n"
-        , method, (long long)(get_current_ms() - socket->context->start_ms), type.c_str(), pkt->seq_nr, out_pkt->payload, pkt->ack_nr);
+    fprintf(stream, "%10s %6d %8lld %6s %10u %10u %10u\n"
+        , method, socket->sock_id, (long long)(get_current_ms() - socket->context->start_ms), type.c_str(), pkt->seq_nr, out_pkt->payload, pkt->ack_nr);
 }

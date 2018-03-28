@@ -45,8 +45,7 @@ static ATP_PROC_RESULT sys_loop(atp_socket * socket, std::function<int(atp_socke
     ATPContext * context = socket->context;
     // set timeout
     // Even if timeout is not set, recvfrom will not be forever blocked because of `alarm(1)`
-    struct timeval tv;
-    tv.tv_sec = 5;
+    struct timeval tv; tv.tv_sec = 5;
     setsockopt(socket->sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     // set timer
     signal_callback = [context](sigval_t sig){
@@ -110,12 +109,16 @@ int atp_getfd(atp_socket * socket){
 atp_socket * atp_create_socket(atp_context * context){
     ATPSocket * socket = new ATPSocket(context);
     int sockfd = socket->init(AF_INET, SOCK_DGRAM, 0);
-    // now this socket is registered to context
-    // but it will not be able to locate until is connected
-    // thus it will have a (addr:port), and `register_to_look_up` will be called
-    // and the socket will be insert into context->look_up
+    // Now this socket is registered to context,
+    // but it will not be able to locate until is connected.
+    // Thus it will have its own (addr:port), and `register_to_look_up` will be called,
+    // and the socket will be insert into `context->look_up`
     context->sockets.push_back(socket);
     return socket;
+}
+
+atp_socket * atp_fork_socket(atp_socket * origin){
+    return origin->context->fork_socket(origin);
 }
 
 ATP_PROC_RESULT atp_async_connect(atp_socket * socket, const struct sockaddr * to, socklen_t tolen){
@@ -150,7 +153,7 @@ ATP_PROC_RESULT atp_accept(atp_socket * socket){
         if (socket->conn_state >= CS_SYN_RECV)
         {
             // IMPORTANT:
-            // DO NOT wait until the last handshake, the ACK packet from peer
+            // DO NOT wait until the last handshake which is the ACK packet from peer,
             // because that ACK may contains with data, according to Delay ACK strategy.
             // sys_loop UDP Recv 12 bytes.
             //     method       ts   flag        seq    payload        ack
@@ -184,6 +187,7 @@ ATP_PROC_RESULT atp_process_udp(atp_context * context, int sockfd, const char * 
     ATPAddrHandle handle_to(to);
     ATP_PROC_RESULT result = ATP_PROC_OK;
     const ATPPacket * pkt = reinterpret_cast<const ATPPacket *>(buf);
+    // Whether the packet is to initialize a connection
     bool is_first = pkt->get_syn() && !(pkt->get_ack());
     ATPSocket * socket = nullptr;
     if (is_first)
@@ -269,6 +273,9 @@ void atp_set_long(atp_socket * socket, size_t option, size_t value){
             log_debug(socket, "Manually change sock_id to %u", socket->sock_id);
         #endif
         break;
+    case ATP_API_REUSEPORT:
+        socket->reuse_port_flag = value;
+        break;
     }
 }
 
@@ -284,5 +291,12 @@ size_t atp_get_long(atp_socket * socket, size_t option){
         return socket->writable();
     case ATP_API_READABLE:
         return socket->readable();
+    case ATP_API_REUSEPORT:
+        return socket->reuse_port_flag;
     }
+}
+
+
+atp_result atp_destroy(atp_socket * socket){
+    socket->destroy_hard();
 }

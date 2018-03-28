@@ -113,7 +113,7 @@ uint16_t ATPContext::new_sock_id(){
 
 void ATPContext::destroy(ATPSocket * socket){
     #if defined (ATP_LOG_AT_DEBUG)
-        log_debug(socket, "Context are destroying me. Goodbye. There are %u sockets left in the context including me", sockets.size());
+        log_debug(socket, "Context are actually destroying me. Goodbye. There are %u sockets left in the context including me", sockets.size());
     #endif
     auto iter = std::find(sockets.begin(), sockets.end(), socket);
     sockets.erase(iter);
@@ -154,6 +154,7 @@ ATP_PROC_RESULT ATPContext::daily_routine(){
     } 
     // clear destroyed sockets
     for(ATPSocket * socket : destroyed_sockets){
+        // ATPContext::destroy, not ATPSocket::destroy
         this->destroy(socket);
     }
     destroyed_sockets.clear();
@@ -193,7 +194,14 @@ ATPSocket * ATPContext::find_socket_by_fd(const ATPAddrHandle & handle_to, int s
         return socket;
     } else{
         #if defined (ATP_LOG_AT_DEBUG)
-            log_debug(this, "Can't locate socket by fd %u, port: %u", sockfd, handle_me.host_port());
+            std::string ext;
+            for(std::map<uint16_t, ATPSocket*>::value_type & pr : this->listen_sockets)
+            {
+                ext += std::to_string(pr.first);
+                ext += ' ';
+            }
+            log_debug(this, "Can't locate socket by fd %u, port: %u, the exsiting %u listening sockets are: %s\n"
+                , sockfd, handle_me.host_port(), this->listen_sockets.size(), tabber(ext).c_str());
         #endif
         return nullptr;
     }

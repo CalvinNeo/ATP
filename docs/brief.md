@@ -1,6 +1,9 @@
 # ATP
 Rather than TCP, which is a flow-oriented protocol, ATP is based on sending and acknowledging packets.
 
+# Features of ATP
+ref. [/docs/features.md](/docs/features.md)
+
 # Layout of the ATP packet
 An ATP packet can be wrapped within a UDP packet
 
@@ -69,11 +72,8 @@ An option has layout as following
     +........+........+
 
 
-# Features of ATP
-ref [/docs/features.md](/docs/features.md)
-
 # The ATP socket
-ref [/docs/socket.md](/docs/socket.md)
+ref. [/docs/socket.md](/docs/socket.md)
 
 # API usages
 

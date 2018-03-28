@@ -494,6 +494,12 @@ struct ATPSocket{
     // callbacks
     atp_callback_func * callbacks[ATP_CALLBACK_SIZE];
 
+    // Options
+    bool reuse_port_flag = false;
+    bool on_listen_port = false;
+    // When we reset a socket to listening port, we set re_listen = true
+    bool re_listen = false;
+
     struct DelaySample{
         // T1: Originate Timestamp
         // T2: Receive Timestamp
@@ -526,14 +532,17 @@ struct ATPSocket{
     }
     ATPSocket(ATPContext * _context);
     // HELPERS
-    void register_to_look_up();
+    void register_to_look_up(bool remove_listen);
     atp_callback_arguments make_atp_callback_arguments(int method, OutgoingPacket * out_pkt, const ATPAddrHandle & addr);
     OutgoingPacket * basic_send_packet(uint16_t flags);
+    OutgoingPacket * construct_packet_from_buffer(const char * buffer, size_t len);
 
     // INTERFACES
     void clear();
+    // void clear_state();
     // called by atp_create_socket, returns sockfd
     int init(int family, int type, int protocol);
+    int init_fork(ATPSocket * origin);
     // active connect
     ATP_PROC_RESULT connect(const ATPAddrHandle & to_addr);
     ATP_PROC_RESULT listen(uint16_t host_port);
@@ -576,6 +585,7 @@ struct ATPSocket{
     ATP_PROC_RESULT handle_recv_packet_hard(OutgoingPacket * recv_pkt);
     ATP_PROC_RESULT handle_recv_packet(OutgoingPacket * recv_pkt, bool from_cache);
     size_t handle_opt(OutgoingPacket * recv_pkt);
+    void init_connection(OutgoingPacket * recv_pkt, bool active);
     ATP_PROC_RESULT process(const ATPAddrHandle & addr, const char * buffer, size_t len);
     ATP_PROC_RESULT invoke_callback(int callback_type, atp_callback_arguments * args);
     // update my_seq_acked_by_peer
@@ -603,6 +613,7 @@ struct ATPSocket{
     void update_rto(OutgoingPacket * recv_pkt);
     void schedule_ack();
     void destroy();
+    void destroy_hard();
     ATP_PROC_RESULT check_timeout();
     const char * hash_code() const{
         return ATPSocket::make_hash_code(sock_id, dest_addr);
@@ -646,6 +657,7 @@ struct ATPContext{
     // `look_up` marks every socket's dest_addr and sock_id, 
     // so local socket can be located by an in-coming packet
     std::map<std::string, ATPSocket *> look_up;
+    // All UDP ports this context owns, with a dominant ATPSocket
     std::map<uint16_t, ATPSocket *> listen_sockets;
     std::vector<ATPSocket *> destroyed_sockets;
     uint64_t start_ms;
@@ -655,6 +667,16 @@ struct ATPContext{
     ATP_PROC_RESULT daily_routine();
     ATPSocket * find_socket_by_fd(const ATPAddrHandle & handle_to, int sockfd);
     ATPSocket * find_socket_by_head(const ATPAddrHandle & handle_to, ATPPacket * pkt);
+
+    ATPSocket * fork_socket(ATPSocket * origin){
+        // Forked socket ans origin socket share the same sockfd,
+        // and is distinguished by sock_id
+        ATPSocket * socket = new ATPSocket(this);
+        int sockfd = socket->init_fork(origin);
+        sockets.push_back(socket);
+        return socket;
+    }
+    std::function<ATP_PROC_RESULT()> server_loop;
 };
 
 

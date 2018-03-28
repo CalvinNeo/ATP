@@ -15,17 +15,29 @@ lib: $(BIN_ROOT)/libatp.so $(BIN_ROOT)/libatp.a
 
 all: demos
 
+cov_comp = -fprofile-arcs -ftest-coverage -fno-inline -DATP_LOG_AT_NOTE -DATP_LOG_AT_DEBUG -DATP_LOG_UDP -DATP_DEBUG_TEST_OVERFLOW
+cov_lnk = -fprofile-arcs -ftest-coverage --coverage -fno-inline -DATP_LOG_AT_NOTE -DATP_LOG_AT_DEBUG -DATP_LOG_UDP -DATP_DEBUG_TEST_OVERFLOW
+
 demo: recv send 
 demo_file: sendfile recvfile 
 demo_poll: sendfile_poll recvfile
+demo_multi: multi_recv send
 
 demos: CFLAGS_COV = 
 demos: CFLAGS_COV_LNK = 
-demos: lib demo demo_file demo_poll
+demos: lib demo demo_file demo_poll demo_multi
 
-demos_cov: CFLAGS_COV = -fprofile-arcs -ftest-coverage -fno-inline -DATP_LOG_AT_NOTE -DATP_LOG_AT_DEBUG -DATP_LOG_UDP -DATP_DEBUG_TEST_OVERFLOW
-demos_cov: CFLAGS_COV_LNK = -fprofile-arcs -ftest-coverage --coverage -fno-inline -DATP_LOG_AT_NOTE -DATP_LOG_AT_DEBUG -DATP_LOG_UDP -DATP_DEBUG_TEST_OVERFLOW
-demos_cov: lib demo_file packet_sim demo_poll demo
+demos_cov: CFLAGS_COV = $(cov_comp)
+demos_cov: CFLAGS_COV_LNK = $(cov_lnk)
+demos_cov: lib demo_file packet_sim demo_poll demo demo_multi
+
+demo_multi_cov: CFLAGS_COV = $(cov_comp)
+demo_multi_cov: CFLAGS_COV_LNK = $(cov_lnk)
+demo_multi_cov: multi_recv send
+
+demo_cov: CFLAGS_COV = $(cov_comp)
+demo_cov: CFLAGS_COV_LNK = $(cov_lnk)
+demo_cov: recv send
 
 # use bash's `&` and wait cause trouble here, refer to earlier commits
 run_test:
@@ -74,6 +86,10 @@ send_aio:
 packet_sim: 
 	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/packet_sim $(SRC_ROOT)/test/packet_sim.cpp -L/usr/lib/ -lpthread $(BIN_ROOT)/libatp.a
 
+multi_recv: 
+	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/multi_recv $(SRC_ROOT)/test/multi_recv.cpp -L/usr/lib/ -lpthread $(BIN_ROOT)/libatp.a
+
+
 $(BIN_ROOT)/libatp.so: $(OBJS)
 	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/libatp.so -shared $(OBJS)
 
@@ -87,16 +103,17 @@ $(OBJ_ROOT)/%.o: $(SRC_ROOT)/%.cpp $(OBJ_ROOT)
 $(OBJ_ROOT):
 	mkdir -p $(OBJ_ROOT)
 
+buffer: $(OBJ_ROOT)
+	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/buffer_test $(SRC_ROOT)/test/buffer_test.cpp
+
 .PHONY: clean
 clean: clean_cov
 	rm -rf $(BIN_ROOT)
 .PHONY: clc
 clc:
 	rm -f core
-	rm -f s.log
-	rm -f s1.log
-	rm -f r.log
-	rm -f r1.log
+	rm -f s*.log
+	rm -f r*.log
 .PHONY: clean_cov
 clean_cov:
 	find ./ -name "*.info" -delete

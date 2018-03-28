@@ -3,7 +3,6 @@ As is discussed in ACK flag, ATP uses the `ACK` flag to acknowledge packets with
 
 ## Delayed ACK
 
-
 # Re-send
 Use function `OutgoingPacket::is_promised_packet` to check whether a packet can be re-sent. Basicly, ATP only resend the following packets:
 
@@ -21,10 +20,9 @@ Use function `OutgoingPacket::is_promised_packet` to check whether a packet can 
 # SACK
 When `my_max_sack_count` is set to non-zero, a `ATP_OPT_SACKOPT` option will be attached to the SYN packets at the connection establishing stage. When handling the `ATP_OPT_SACKOPT` option, `my_max_sack_count` will be updated. 
 
+# New PAWS strategies
 
-# Fast retransmit
-
-# Handle SEQ/ACK number overflowing situation
+# Probe clock drift
 
 # Stop-and-Wait
 Nagle's algorithm inhibit the sending of new TCP segments when new outgoing data arrives from the user if any previously transmitted data on the connection remains unacknowledged.
@@ -35,6 +33,14 @@ Every ATP socket has a distinct sock\_id, multiple ATP sockets can read/write bi
 
 # Traffic control
 ## Peer's window
-a Sliding Window Protocol implementation is provided in ATP.
+A Sliding Window Protocol implementation is provided in ATP.
 
 ## Congestion window
+
+## Slow start
+ATP is recommended to be used in between relatively healthy network connections. Slow start is disabled by default.
+
+## Fast retransmit
+
+# Multiplexing
+## Fork a socket

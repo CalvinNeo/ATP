@@ -92,6 +92,30 @@ def test_once4(exe_send, exe_recv, input_fn, output_fn, timeout):
     except OSError:
         pass
 
+def test_multi():
+    print "test fork"
+    r = (["./bin/multi_recv"], None, open("r.log", "w"), open("r1.log", "w"))
+    s1 = (["./bin/send"], subprocess.PIPE, open("s_1.log", "w"), open("s1_1.log", "w"))
+    s2 = (["./bin/send"], subprocess.PIPE, open("s_2.log", "w"), open("s1_2.log", "w"))
+    s3 = (["./bin/send"], subprocess.PIPE, open("s_3.log", "w"), open("s1_3.log", "w"))
+    procs = start_procs([r, s1], True) # Must in shell, otherwise cause strange block
+    
+    time.sleep(1) # wait till connection is established
+    print "start a new sender"
+    procs.extend(start_procs([s2], True)) # start a new sender
+    procs[1].stdin.write("message from sender 1\n")
+    procs[2].stdin.write("message from sender 2\n")
+    print "close the listening socket sender1"
+    procs[1].stdin.close()
+    print "start another sender"
+    procs.extend(start_procs([s3], True)) # start a new sender
+    procs[3].stdin.write("message from sender 3\n")
+    print "close all senders"
+    procs[2].stdin.close()
+    procs[3].stdin.close()
+    wait_procs(procs, 10.0)
+
+
 def test_normal():
     print "test poll and urg"
     r = (["./bin/recvfile", "-oout.dat"], subprocess.PIPE, open("r.log", "w"), open("r1.log", "w"))
@@ -167,7 +191,9 @@ def test_on_bad_network():
     print "test at 50% loss rate"
     test_once4(["./bin/sendfile", "-l0.5"], ["./bin/recvfile", "-l0.5"], "in.dat", "out.dat", 130.0)
 
-def main():
+def main(): 
+    test_multi()
+
     test_normal()
 
     test_on_bad_network()

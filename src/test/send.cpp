@@ -195,63 +195,73 @@ int main(int argc, char* argv[], char* env[]){
     if(atp_connect(socket, (const SA *)&srv_addr, sizeof srv_addr) != ATP_PROC_OK){
         puts("Connection Abort.");
     }
-    bool stdin_close = false;
-    std::thread keybd_thread{[=](){
-        int n; 
-        char sendmsg[ATP_MIN_BUFFER_SIZE];
-        while(true){
-            n = fread(&sendmsg, 1, ATP_MIN_BUFFER_SIZE, stdin);
-            if(n == 0){
-                if(feof(stdin)){
-                    atp_close(socket);
-                    return;
-                }else{
 
-                }
-            }else{
-                if (simulate_packet)
-                {
-                    char * start = strtok(sendmsg, "\n");
-                    while(start){
-                        if(start[0] == ':'){
-                            // This is a command
-                            if(start[1] == 'S'){
-                                puts("Begin compute clock skew");
-                                socket->compute_clock_skew();
-                            }
-                        }else{
-                            send_sim(socket, start);
-                        }
-                        start = strtok(0, "\n");
-                    }
-                }else{
-                    n = strlen(sendmsg);
-                    atp_write(socket, sendmsg, n);
-                }
-            }
-        }
-    }};
 
+    struct pollfd pfd[2];
     while (true) {
-        sockaddr * psock_addr = (SA *)&srv_addr;
-        // MUST firstly run `atp_process_udp`, then run fgets.
-        // if inverse this order, then `atp_process_udp` will always need to re-send the last packet sent by `atp_write`,
-        // because peer can't immediately send back an ACK
-        if ((n = recvfrom(sockfd, msg, ATP_MAX_READ_BUFFER_SIZE, 0, psock_addr, &srv_len)) >= 0){
-            ATP_PROC_RESULT result = atp_process_udp(context, sockfd, msg, n, (const SA *)&srv_addr, srv_len);
-            if (result == ATP_PROC_FINISH)
-            {
-                // peer closed message, this would never happen, because I'm always the first to close
-                // even if peer terminates, don't need to call `atp_close` or `atp_async_close` here, 
-                // because already handled in callback ATP_CALL_ON_PEERCLOSE
+        pfd[0].fd = sockfd;
+        pfd[0].events = POLLIN;
+
+        pfd[1].fd = STDIN_FILENO;
+        pfd[1].events = POLLIN;
+
+
+        int ret = poll(pfd, 2, 1000);
+        size_t n;
+
+        if (ret < 0) {
+        }
+        else if (ret == 0) {
+            if(atp_timer_event(context, 1000) == ATP_PROC_FINISH){
                 break;
             }
-        }else{
-            if(!(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN)) break;
+        }
+        else {
+            if ((pfd[0].revents & POLLIN) == POLLIN) {
+                sockaddr * psock_addr = (SA *)&srv_addr;
+                if ((n = recvfrom(sockfd, msg, ATP_MAX_READ_BUFFER_SIZE, 0, psock_addr, &srv_len)) >= 0){
+                    ATP_PROC_RESULT result = atp_process_udp(context, sockfd, msg, n, (const SA *)&srv_addr, srv_len);
+                    if (result == ATP_PROC_FINISH){
+                        break;
+                    } 
+                }
+            }
+            if ((pfd[1].revents & POLLIN) == POLLIN) {
+                int n; 
+                char sendmsg[ATP_MIN_BUFFER_SIZE];
+
+                // `fread` function reads until EOF
+                n = fread(&sendmsg, 1, ATP_MIN_BUFFER_SIZE, stdin);
+                // n = fscanf(stdin, "%s\n", &sendmsg);
+                if(n > 0){
+                    if (simulate_packet)
+                    {
+                        char * start = strtok(sendmsg, "\n");
+                        while(start){
+                            if(start[0] == ':'){
+                                // This is a command
+                                if(start[1] == 'S'){
+                                    puts("Begin compute clock skew");
+                                    socket->compute_clock_skew();
+                                }
+                            }else{
+                                send_sim(socket, start);
+                            }
+                            start = strtok(0, "\n");
+                        }
+                    }else{
+                        n = strlen(sendmsg);
+                        printf("send msg %s\n", sendmsg);
+                        atp_write(socket, sendmsg, n);
+                    }
+                }
+            }else if((pfd[1].revents & POLLHUP) == POLLHUP){
+                break;
+            }
         }
     }
-    keybd_thread.join();
 
+    atp_close(socket);
     delete context; context = nullptr;
     return 0;
 };

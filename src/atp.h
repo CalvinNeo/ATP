@@ -34,7 +34,8 @@ enum atp_api_options{
     ATP_API_SOCKID,
     ATP_API_STATUS,
     ATP_API_WRITABLE,
-    ATP_API_READABLE
+    ATP_API_READABLE,
+    ATP_API_REUSEPORT
 };
 
 atp_context * atp_create_server_context();
@@ -53,6 +54,8 @@ atp_result atp_process_udp(atp_context * context, int sockfd, const char * buf, 
 atp_result atp_timer_event(atp_context * context, uint64_t interval);
 atp_result atp_close(atp_socket * socket);
 atp_result atp_async_close(atp_socket * socket);
+atp_socket * atp_fork_socket(atp_socket * origin);
+atp_result atp_destroy(atp_socket * socket);
 void atp_set_callback(atp_socket * socket, int callback_type, atp_callback_func * proc);
 
 atp_result atp_eof(atp_socket * socket);

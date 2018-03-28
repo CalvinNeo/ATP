@@ -5,6 +5,13 @@ ATP is a simple reliable transport protocol implementation based on packets.
 [![Build Status](https://travis-ci.org/CalvinNeo/ATP.svg?branch=master)](https://travis-ci.org/CalvinNeo/ATP)  [![Coverage Status](https://coveralls.io/repos/github/CalvinNeo/ATP/badge.svg?branch=master)](https://coveralls.io/github/CalvinNeo/ATP?branch=master)
 
 # Usage
+## Overview
+1. ATP provides reliable transport
+2. ATP can transmit urgent data
+3. ATP has a small sized head
+4. ATP allows simply "fork" a socket over the same port
+5. ATP is independent from system APIs
+
 ## Requirements
 1. C++17 standard(e.g. g++7.2)
 
