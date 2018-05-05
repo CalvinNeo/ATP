@@ -46,5 +46,6 @@ src/logs
 *.gcda
 *.gcno
 *.info
+vgcore.*
 logs/
 ATPLCovHTML/

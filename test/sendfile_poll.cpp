@@ -17,19 +17,11 @@
 *   with this program; if not, write to the Free Software Foundation, Inc.,
 *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 */
-#include "../atp.h"
-#include "../udp_util.h"
+#include "atp_standalone.h"
+#include "udp_util.h"
 #include "test.inc.h"
-#include "../atp_impl.h"
+#include "atp_impl.h"
 #include <unistd.h>
-
-void activate_nonblock(int fd)
-{
-    int flags = fcntl(fd, F_GETFL);
-    if (flags == -1) err_sys("fcntl");
-    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) err_sys("fcntl");
-}
-
 
 int main(int argc, char* argv[], char* env[]){
     int oc;
@@ -116,7 +108,7 @@ int main(int argc, char* argv[], char* env[]){
         }
         if(fin_obj.eof() && stdin_hup){
             printf("all closed %llu\n", get_current_ms());
-            atp_close(socket);
+            atp_standalone_close(socket);
             break;
         }
 
@@ -127,9 +119,7 @@ int main(int argc, char* argv[], char* env[]){
             break;
         }
         else if (ret == 0) {
-            if(atp_timer_event(context, 1000) == ATP_PROC_FINISH){
-                break;
-            }
+            if(atp_timer_event(context, 1000) == ATP_PROC_FINISH) break;
         }
         else {
             if ((pfd[0].revents & POLLIN) == POLLIN) {
@@ -137,7 +127,7 @@ int main(int argc, char* argv[], char* env[]){
                 if(n == 0 || !atp_get_long(socket, ATP_API_WRITABLE)){
 
                 }else{
-                    atp_result r = atp_write(socket, buffer, n);
+                    atp_result r = atp_async_write(socket, buffer, n);
                     if (r > 0)
                     {
                         // r == 0 or r < 0 means error
@@ -150,10 +140,7 @@ int main(int argc, char* argv[], char* env[]){
                 n = recvfrom(sockfd, recv_msg, ATP_MIN_BUFFER_SIZE, 0, psock_addr, &srv_len);
                 if (n < 0) puts("err");
                 ATP_PROC_RESULT result = atp_process_udp(context, sockfd, recv_msg, n, (const SA *)&srv_addr, srv_len);
-                if (result == ATP_PROC_FINISH)
-                {
-                    break;
-                }
+                if (result == ATP_PROC_FINISH) break;
             }
             if ((pfd[2].revents & POLLIN) == POLLIN) {
                 // n = fread(&send_msg, 1, ATP_MIN_BUFFER_SIZE, stdin);
@@ -165,7 +152,7 @@ int main(int argc, char* argv[], char* env[]){
                 }else{
                     printf("send urg data[%u]: %.*s \n", n, n, send_msg);
                     // The urgent message is request to be sent to peer within 1000ms
-                    atp_write_oob(socket, send_msg, n, 1000);
+                    atp_send_oob(socket, send_msg, n, 1000);
                     fflush(stdin);
                     fflush(stdout);
                 }

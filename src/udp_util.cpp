@@ -50,7 +50,7 @@ struct sockaddr_in make_socketaddr_in(int family, const char * ipaddr_str, int p
     return addr;
 }
 
-int make_socket(int family, int type, int protocol) {
+inline int make_socket(int family, int type, int protocol) {
     int sockfd;
 
     if ((sockfd = socket(family, type, protocol)) < 0)

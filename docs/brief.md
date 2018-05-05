@@ -1,5 +1,5 @@
 # ATP
-Rather than TCP, which is a flow-oriented protocol, ATP is based on sending and acknowledging packets.
+Rather than TCP, which is a stream-oriented protocol, ATP is message-oriented.
 
 # Features of ATP
 ref. [/docs/features.md](/docs/features.md)
@@ -41,7 +41,7 @@ The flags are
     +........+........+
 
 ## seq and ack
-Both `seq` and `ack` are packet-indexed rather than bit-indexed(as TCP does).
+Both `seq` and `ack` are packet-indexed rather than byte-indexed(as TCP does).
 
 ## sock_id
 ATP allows multiple connections established through one port. The `sock_id` field is used to distiguish ATP packets sent to the same port.

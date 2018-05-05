@@ -17,27 +17,20 @@
 *   with this program; if not, write to the Free Software Foundation, Inc.,
 *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 */
-#include "../atp.h"
-#include "../udp_util.h"
+#include "atp_svc.h"
+#include "udp_util.h"
 #include "test.inc.h"
 #include <iostream>
+#include <cstdio>
 
-ATP_PROC_RESULT data_arrived(atp_callback_arguments * args){
-    atp_socket * socket = args->socket;
-    size_t length = args->length; 
-    const char * data = args->data;
-
-    printf("data arrived: %.*s\n", length, data);
-    return ATP_PROC_OK;
-}
+const size_t buffer_size = 10000;
+char buffer[buffer_size];
 
 int main(int argc, char* argv[], char* env[]){
     uint16_t serv_port = 9876;
     struct sockaddr_in cli_addr; socklen_t cli_len = sizeof(cli_addr);
     struct sockaddr_in srv_addr;
 
-    char msg[ATP_MAX_READ_BUFFER_SIZE];
-    int n;
     bool simulate_packet = false;
     int oc;
 
@@ -54,11 +47,13 @@ int main(int argc, char* argv[], char* env[]){
         }
     }
 
+
     reg_sigterm_handler(sigterm_handler);
-    atp_context * context = atp_create_context();
-    atp_socket * socket = atp_create_socket(context);
+    atp_context * context = atp_create_context_server();
+    atp_start_server(context);
+
+    atp_socket * socket = atp_create_blocked_socket(context);
     int sockfd = atp_getfd(socket);
-    atp_set_callback(socket, ATP_CALL_ON_RECV, data_arrived);
 
     srv_addr = make_socketaddr_in(AF_INET, nullptr, serv_port);
 
@@ -66,26 +61,28 @@ int main(int argc, char* argv[], char* env[]){
         err_sys("bind error");
 
     atp_listen(socket, serv_port);
-    if(atp_accept(socket) != ATP_PROC_OK){
-        puts("Connection Abort.");
-    }
-    while (true) {
-        sockaddr * pcli_addr = (SA *)&cli_addr;
 
-        if ((n = recvfrom(sockfd, msg, ATP_MAX_READ_BUFFER_SIZE, 0, pcli_addr, &cli_len)) < 0){
-            if(!(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN)) break;  
-            if(atp_timer_event(context, 1000) == ATP_PROC_FINISH){
-                // Context finished, mission completed, quit
-                break;
-            }
+    if(atp_blocked_accept(socket) != ATP_PROC_OK){
+        puts("Connection Abort.");
+    }else{
+        puts("Connection established.");
+    }
+
+    atp_result result;
+    while(result = atp_blocked_read(socket, buffer, buffer_size)){
+        if (result > 0)
+        {
+            puts("Data:");
+            printf("%.*s\n", result, buffer);
+        }else if(result == ATP_PROC_FINISH){
+            puts("Recv Finished.");
+            break;
         }else{
-            ATP_PROC_RESULT result = atp_process_udp(context, sockfd, msg, n, (const SA *)&cli_addr, cli_len);
-            if (result == ATP_PROC_FINISH)
-            {
-                break;
-            }
+            puts("Error.");
+            break;
         }
     }
-    delete context; context = nullptr;
-    return 0;
+
+    atp_wait_server(context);
+    puts("Quit.");
 }

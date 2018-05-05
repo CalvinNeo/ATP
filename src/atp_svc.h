@@ -19,35 +19,27 @@
 */
 #pragma once
 
-#include <sys/types.h> // ssize_t
-#include <sys/socket.h>
-#include <netinet/in.h> // sockaddr
-#include <arpa/inet.h> // inet_ functions
-#include <fcntl.h>
-#include <signal.h>
-#include <unistd.h>
+#include "atp.h"
 
-#include "error.h"
-#include <stdint.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-#include <sys/sysctl.h>
-#include <poll.h>
-#include "atp_common.h"
+typedef struct ATPBlockedSocket atp_blocked_socket;
+typedef struct ATPContextServer atp_context_server;
 
-#define SA struct sockaddr
+atp_context * atp_create_context_server();
+void atp_start_server(atp_context * context);
+void atp_wait_server(atp_context * context);
 
-typedef void sigfunc_t(int);
+atp_socket * atp_fork_blocked_socket(atp_socket * origin);
+atp_socket * atp_create_blocked_socket(atp_context * context);
 
-sigfunc_t * setup_signal(int signo, sigfunc_t * func);
+atp_result atp_blocked_close(atp_socket * socket);
+atp_result atp_blocked_connect(atp_socket * socket, const struct sockaddr * to, socklen_t tolen);
+atp_result atp_blocked_accept(atp_socket * socket);
+atp_result atp_blocked_read(atp_socket * socket, void * buffer, size_t n);
 
-int make_socket(int family, int type, int protocol, int port, const char * ipaddr_str);
-struct sockaddr_in make_socketaddr_in(int family, const char * ipaddr_str, int port);
-
-ATP_PROC_RESULT normal_sendto(atp_callback_arguments * args);
-
-inline void activate_nonblock(int fd)
-{
-    int flags = fcntl(fd, F_GETFL);
-    if (flags == -1) err_sys("fcntl");
-    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) err_sys("fcntl");
+#ifdef __cplusplus
 }
+#endif

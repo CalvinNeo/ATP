@@ -257,27 +257,30 @@ struct PACKED_ATTRIBUTE TimeDelayOption{
 
 struct OutgoingPacket{
     ~OutgoingPacket(){
-        #if defined (ATP_LOG_AT_DEBUG)
-            fprintf(stderr, "Packet destructed.\n");
-        #endif
-        if(holder)
+        if(!observer)
             destroy();
     }
 
-    // bool holder = true;
-    // bool marked = false;
-    // bool selective_acked = false;
-    uint8_t holder:1, marked:1, selective_acked:1, ahead_handled: 1, need_resend: 1;
+    // Don't directly call `new OutgoingPacket`
+    uint8_t observer: 1, marked: 1, selective_acked: 1, ahead_handled: 1, need_resend: 1;
     size_t length = 0; // length of the whole
     size_t payload = 0;
     size_t option_len = 0;
     uint64_t timestamp; // microseconds
     uint32_t transmissions = 0; // total number of transmissions
     uint32_t full_seq_nr;
+    // IMPORTANT: `data` is allocated by malloc/free, not new/delete
     char * data; // = head + data
 
     void destroy(){
         // TODO now manually managing memory, swith to smart pointers later
+
+        #if defined (ATP_LOG_AT_DEBUG)
+            if(data)
+                fprintf(stderr, "Packet destructed with seq %u.\n", get_head()->seq_nr);
+            else
+                fprintf(stderr, "Packet destructed.\n");
+        #endif
         std::free(data);
         data = nullptr;
     }
@@ -295,7 +298,7 @@ struct OutgoingPacket{
         return nullptr;
     }
 
-    void update_real_payload(){
+    size_t update_real_payload(){
         // This function is used to calculate a received packet.
         // For sent packet, `add_option` update `option_len` automatically.
         option_len = 0;
@@ -370,7 +373,7 @@ struct ATPSocket{
     uint16_t peer_sock_id = 0;
 
     mutable ATPAddrHandle local_addr;
-    inline ATPAddrHandle & get_local_addr(){
+    inline ATPAddrHandle & get_local_addr() const{
         if (conn_state == CS_UNINITIALIZED)
         {
             return local_addr;
@@ -442,8 +445,9 @@ struct ATPSocket{
     uint8_t atp_retries1 = 3; // TCP RFC recommends 3
     uint8_t atp_retries2 = 8; // TCP RFC recommends 15
     uint8_t atp_syn_retries1 = 5;
-    uint8_t atp_frr_retries = 0; // Fast retransmit
-    uint8_t frr_counter = 0; // Fast retransmit counter, when equals to atp_frr_retries trigger a resending
+    uint8_t atp_frr_retries = 0; // Trigger fast retransmit when frr_counter equals to atp_frr_retries 
+    uint8_t frr_counter = 0; // Fast retransmit counter, keep track of repeated ACK. 
+    uint16_t reorder_count = 0; // Reorder couter, keep track of reordered packets. 
 
     // Window by Packets
     // NOTICE that type must be `int` rather than any unsigned
@@ -472,8 +476,6 @@ struct ATPSocket{
     // MSS and MTU probing
     size_t current_mss = ATP_MSS_CEILING;
 
-    // Reorder infomations
-    uint16_t reorder_count = 0;
 
     // SACK
     // If `peer_max_sack_count != 0` then SACK is enabled by peer, they we can SACK peer's packets
@@ -492,7 +494,8 @@ struct ATPSocket{
     #endif
 
     // callbacks
-    atp_callback_func * callbacks[ATP_CALLBACK_SIZE];
+    // typedef atp_result atp_callback_func(atp_callback_arguments *);
+    std::function<atp_result(atp_callback_arguments *)> callbacks[ATP_CALLBACK_SIZE];
 
     // Options
     bool reuse_port_flag = false;
@@ -501,10 +504,11 @@ struct ATPSocket{
     bool re_listen = false;
 
     struct DelaySample{
-        // T1: Originate Timestamp
-        // T2: Receive Timestamp
-        // T3: Transmit Timestamp
-        // T4: Destination Timestamp
+        // All timepoints are updated if re-transmission occurs
+        // T1: Originate Timestamp, timepoint when A send packet P1
+        // T2: Receive Timestamp, timepoint when B received P1
+        // T3: Transmit Timestamp, timepoint when B send ACK packet
+        // T4: Destination Timestamp, timepoint when A receive B's ACK packet
         uint64_t t1;
         uint64_t t2;
         uint64_t t3;
@@ -533,16 +537,20 @@ struct ATPSocket{
     ATPSocket(ATPContext * _context);
     // HELPERS
     void register_to_look_up(bool remove_listen);
-    atp_callback_arguments make_atp_callback_arguments(int method, OutgoingPacket * out_pkt, const ATPAddrHandle & addr);
+    atp_callback_arguments make_atp_callback_arguments(ATP_CALLBACKTYPE_ENUM method, OutgoingPacket * out_pkt, const ATPAddrHandle & addr);
     OutgoingPacket * basic_send_packet(uint16_t flags);
     OutgoingPacket * construct_packet_from_buffer(const char * buffer, size_t len);
 
     // INTERFACES
     void clear();
-    // void clear_state();
+    #ifdef _ATP_CLEAR_STATE_FUNC
+    void clear_state();
+    #endif
     // called by atp_create_socket, returns sockfd
     int init(int family, int type, int protocol);
     int init_fork(ATPSocket * origin);
+    virtual ATPSocket * fork_me();
+    ATPSocket * fork_basic();
     // active connect
     ATP_PROC_RESULT connect(const ATPAddrHandle & to_addr);
     ATP_PROC_RESULT listen(uint16_t host_port);
@@ -559,6 +567,7 @@ struct ATPSocket{
     ATP_PROC_RESULT close();
     bool writable() const;
     bool readable() const;
+    bool eof() const;
     void add_option(OutgoingPacket * out_pkt, uint8_t opt_kind, uint8_t opt_data_len, char * opt_data);
     void add_data(OutgoingPacket * out_pkt, const void * buf, const size_t len);
     size_t bytes_can_send_once() const;
@@ -614,6 +623,7 @@ struct ATPSocket{
     void schedule_ack();
     void destroy();
     void destroy_hard();
+    virtual void switch_state(CONN_STATE_ENUM new_state);
     ATP_PROC_RESULT check_timeout();
     const char * hash_code() const{
         return ATPSocket::make_hash_code(sock_id, dest_addr);
@@ -629,7 +639,8 @@ struct ATPSocket{
         return const_cast<const char *>(hash_str);
     }
 private:
-    mutable char hash_str[INET_ADDRSTRLEN * 2 + 5 * 2 + 10 * 3];
+    // 2 * %s + 3 * %05u + 11 of symbols(such as [) + 20 of fd
+    mutable char hash_str[INET_ADDRSTRLEN * 2 + 5 * 3 + 11 + 20];
 };
 
 
@@ -663,20 +674,42 @@ struct ATPContext{
     uint64_t start_ms;
 
     uint16_t new_sock_id();
-    void destroy(ATPSocket * socket);
-    ATP_PROC_RESULT daily_routine();
+    void destroy_socket(ATPSocket * socket);
+    virtual ATP_PROC_RESULT daily_routine();
     ATPSocket * find_socket_by_fd(const ATPAddrHandle & handle_to, int sockfd);
-    ATPSocket * find_socket_by_head(const ATPAddrHandle & handle_to, ATPPacket * pkt);
-
-    ATPSocket * fork_socket(ATPSocket * origin){
-        // Forked socket ans origin socket share the same sockfd,
-        // and is distinguished by sock_id
-        ATPSocket * socket = new ATPSocket(this);
-        int sockfd = socket->init_fork(origin);
-        sockets.push_back(socket);
-        return socket;
+    ATPSocket * find_socket_by_head(const ATPAddrHandle & handle_to, const ATPPacket * pkt);
+    bool finished() const{
+        return this->sockets.empty() && this->destroyed_sockets.empty();
     }
-    std::function<ATP_PROC_RESULT()> server_loop;
+
+    virtual ATP_PROC_RESULT register_listen_port(ATPSocket * socket, uint16_t host_port){
+        if (listen_sockets.find(host_port) == listen_sockets.end())
+        {
+            listen_sockets[host_port] = socket;
+            return ATP_PROC_OK;
+        }else{
+            return ATP_PROC_ERROR;
+        }
+    }
+
+    virtual void deregister_listen_port(uint16_t host_port){
+        std::map<uint16_t, ATPSocket *>::iterator iter = listen_sockets.find(host_port);
+        if(iter != listen_sockets.end()){
+            #if defined (ATP_LOG_AT_DEBUG)
+            log_debug(this, "Remove socket from listening.");
+            #endif
+            listen_sockets.erase(iter);
+        }else{
+            #if defined (ATP_LOG_AT_DEBUG)
+            log_debug(this, "Remove socket from listening failed because we couldn't find.");
+            #endif
+        }
+    }
+
+    void register_to_look_up(ATPSocket * socket){
+        // if not registered, can't find `ATPSocket *` by (addr:port)        
+        look_up[ATPSocket::make_hash_code(socket->sock_id, socket->dest_addr)] = socket;
+    }
 };
 
 

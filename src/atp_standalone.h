@@ -19,35 +19,16 @@
 */
 #pragma once
 
-#include <sys/types.h> // ssize_t
-#include <sys/socket.h>
-#include <netinet/in.h> // sockaddr
-#include <arpa/inet.h> // inet_ functions
-#include <fcntl.h>
-#include <signal.h>
-#include <unistd.h>
+#include "atp.h"
 
-#include "error.h"
-#include <stdint.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-#include <sys/sysctl.h>
-#include <poll.h>
-#include "atp_common.h"
+atp_result atp_standalone_close(atp_socket * socket);
+atp_result atp_standalone_connect(atp_socket * socket, const struct sockaddr * to, socklen_t tolen);
+atp_result atp_standalone_accept(atp_socket * socket);
 
-#define SA struct sockaddr
-
-typedef void sigfunc_t(int);
-
-sigfunc_t * setup_signal(int signo, sigfunc_t * func);
-
-int make_socket(int family, int type, int protocol, int port, const char * ipaddr_str);
-struct sockaddr_in make_socketaddr_in(int family, const char * ipaddr_str, int port);
-
-ATP_PROC_RESULT normal_sendto(atp_callback_arguments * args);
-
-inline void activate_nonblock(int fd)
-{
-    int flags = fcntl(fd, F_GETFL);
-    if (flags == -1) err_sys("fcntl");
-    if (fcntl(fd, F_SETFL, flags | O_NONBLOCK) == -1) err_sys("fcntl");
+#ifdef __cplusplus
 }
+#endif

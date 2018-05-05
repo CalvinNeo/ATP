@@ -17,9 +17,9 @@
 *   with this program; if not, write to the Free Software Foundation, Inc.,
 *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 */
-#include "../atp.h"
-#include "../udp_util.h"
-#include "../atp_impl.h"
+#include "atp.h"
+#include "udp_util.h"
+#include "atp_impl.h"
 #include "test.inc.h"
 
 // This program simulates a ATPPacket

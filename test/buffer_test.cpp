@@ -28,7 +28,7 @@
 #include <numeric>
 #include <vector>
 
-#include "../scaffold.h"
+#include "scaffold.h"
 
 using namespace std;
 
@@ -39,22 +39,33 @@ bool test(const std::vector<int> & vec, int offset){
     tbuf.init();
     std::string in, out;
     for(int i = 0; i < vec.size(); i++){
-        printf("\nPut %u-th element %u\n", i, vec[i]);
-        tbuf.put(offset + i, new int(vec[i]));
+        printf("\nPut %u-th element %d + %d\n", i, vec[i], offset);
+        tbuf.put(offset + vec[i], new int(vec[i]));
         in += ("," + std::to_string(vec[i]));
     }
+    while(!tbuf.empty()){
+        int * x = tbuf.front();
+        tbuf.pop_front();
+        out += ("," + std::to_string(*x));
+        delete x;
+    }
     for(int i = 0; i < vec.size(); i++){
-    // for(int i = vec.size() - 1; i >= 0; i--){
-        int * x = tbuf.get(offset + i);
+        printf("\nPut %u-th element %d + %d\n", i, vec[i], offset);
+        tbuf.put(offset + vec[i], new int(vec[i]));
+        in += ("," + std::to_string(vec[i]));
+    }
+    while(!tbuf.empty()){
+        int * x = tbuf.front();
+        tbuf.pop_front();
         out += ("," + std::to_string(*x));
         delete x;
     }
     printf("I: %s\nO: %s\n", in.c_str(), out.c_str());
     return in == out;
 }
-
 int main(int argc, char* argv[], char* env[]){
     test({1,2,3}, 100);
     test({1,2,3,4,5,6,7,8,9,10}, 200);
+    test({6,7,10,1,8,9,2,3,4,5}, 200);
     return 0;
 }

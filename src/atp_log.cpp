@@ -156,6 +156,6 @@ void print_out(ATPSocket * socket, OutgoingPacket * out_pkt, const char * method
     if(stream == nullptr){
         stream = stdout;
     }
-    fprintf(stream, "%10s %6d %8lld %6s %10u %10u %10u\n"
+    fprintf(stream, "%10s %6d %8lld %6s %10u %10lu %10u\n"
         , method, socket->sock_id, (long long)(get_current_ms() - socket->context->start_ms), type.c_str(), pkt->seq_nr, out_pkt->payload, pkt->ack_nr);
 }

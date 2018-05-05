@@ -1,17 +1,18 @@
 # ATP
 
-ATP is a simple reliable transport protocol implementation based on packets.
+ATP is a message-oriented reliable transport protocol implementation.
 
 [![Build Status](https://travis-ci.org/CalvinNeo/ATP.svg?branch=master)](https://travis-ci.org/CalvinNeo/ATP)  [![Coverage Status](https://coveralls.io/repos/github/CalvinNeo/ATP/badge.svg?branch=master)](https://coveralls.io/github/CalvinNeo/ATP?branch=master)
 
-# Usage
-## Overview
-1. ATP provides reliable transport
-2. ATP can transmit urgent data
-3. ATP has a small sized head
-4. ATP allows simply "fork" a socket over the same port
-5. ATP is independent from system APIs
+# Overview
+1. ATP provides reliable transportation of data as well as a series of TCP's features.
+2. ATP has a small sized head.
+3. ATP allows time critical data transmission by urgent mechanism and clock drift probing.
+4. ATP allows multiple connections established over the same port. 
+5. ATP has a lightweight connecting/disconnecting mechanism. You can "fork" an established connection in ATP without extra 3-way handshake. You will endure shorter TIME\_WAIT stage than TCP.
+6. ATP provides a framework as well as a service.
 
+# Build
 ## Requirements
 1. C++17 standard(e.g. g++7.2)
 
@@ -20,46 +21,64 @@ Make the project by command
 
     make lib
 
+Run test on demos by command
+    
+    make run_test
+
 ## APIs
 All APIs are available in [/src/atp.h](/src/atp.h), and is compatible with C89
 
 
-# Demo
-There are several demos:
+# ATP as a framework(ASAF)
+When ATP is used as a framework, it provides with a flexible underlying control. In this case, You must handle incoming UDP packets and maintain a timer outside the ATP framework. You must interact with the ATP context through two APIs:
+1. `atp_process_udp`
+    When there's an incoming UDP packet, you must inform ATP context to parse the raw UDP packet by calling `atp_process_udp`, the context will then dispatch the packets to correct ATP sockets. 
+2. `atp_timer_event`
+    You must also maintain a timer, and call `atp_timer_event` to generate timer signals for the context. 
 
-1. sender/receiver
+ASAF is not thread safe.
 
-    The demo includes two separated programs: the sender and the receiver. A File will be sent from the sender to the receiver.
+## Demos
+Most of these demos use healper `atp_standalone_` APIs provided in [/src/atp_standalone.h](/src/atp_standalone.h). These APIs help you from coding the connect/disconnect procedure yourself.
+
+You can build all following tests by
+    
+    make demos
+
+1. sendfile/recvfile
+
+    The demo includes two separated programs: the sender and the receiver. A File will be sent from the sender to the receiver. In this demo, both sides set their UDP Socket to be nonblock, because there will be no multi-threading or multiplexing.
     You can set loss rate by modifying function `simulate_packet_loss_sendto` in [/src/atp_callback.cpp](/src/atp_callback.cpp).
 
-    Build it by
+    Build this demo by
 
-        make demo_file
+        make test TARGET=demo_file
 
 2. send/recv
 
-    This demo is similar to sender/receiver, instead of sending file, send/recv use stdin/stdout now.
+    This demo is similar to sendfile/recvfile, instead of sending file, send/recv use stdin/stdout now. You can run with argument `-s` to simulate a ATPPacket by commands with certain format. This demo provides a convenient test method.
+    Build this demo by
 
-    Build it by
-
-        make demo
+        make test TARGET=demo_cmd
 
 3. send_poll
 
-    This demo implements the sender's part with `poll`.
+    This demo implements the sendfile's part with `poll`.
 
-    Build it by
+    Build this demo by
 
-        make demo_poll
+        make test TARGET=demo_poll
 
 4. send_aio
 
-    This demo implements the sender's part with aio.
+    This demo implements the sendfile's part with aio.
 
-    Build it by
+    Build this demo by
     
-        make send_aio
+        make test TARGET=send_aio
 
+# ATP as a service
+## Demos
 
 # Docs
 [/docs/brief.md](/docs/brief.md)

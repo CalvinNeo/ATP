@@ -17,9 +17,9 @@
 *   with this program; if not, write to the Free Software Foundation, Inc.,
 *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 */
-#include "../atp.h"
-#include "../udp_util.h"
-#include "../atp_impl.h"
+#include "atp_standalone.h"
+#include "udp_util.h"
+#include "atp_impl.h"
 #include <unistd.h>
 #include <fcntl.h>
 #include <aio.h>
@@ -99,7 +99,7 @@ int main(){
             }
         }
         n = strlen(textmsg);
-        atp_write(socket, textmsg, n);
+        atp_async_write(socket, textmsg, n);
         usleep(500 * 1000); // sleep 500ms
     }
     delete context; context = nullptr;

@@ -54,8 +54,8 @@ std::string tabber(const std::string & src, bool tail_crlf) {
     return ans;
 }
 
-static std::string OutgoingPacket::get_flags_str(OutgoingPacket const * out_pkt) {
-    ATPPacket * pkt = out_pkt->get_head();
+std::string OutgoingPacket::get_flags_str(OutgoingPacket const * out_pkt) {
+    const ATPPacket * pkt = out_pkt->get_head();
     std::string type;
     if (pkt->get_syn())
     {
@@ -111,22 +111,21 @@ uint16_t ATPContext::new_sock_id(){
     return s;
 }
 
-void ATPContext::destroy(ATPSocket * socket){
+void ATPContext::destroy_socket(ATPSocket * socket){
     #if defined (ATP_LOG_AT_DEBUG)
         log_debug(socket, "Context are actually destroying me. Goodbye. There are %u sockets left in the context including me", sockets.size());
     #endif
+    // Try to remove from socket
     auto iter = std::find(sockets.begin(), sockets.end(), socket);
     sockets.erase(iter);
+    // Try to remove from look_up
     auto map_iter1 = look_up.find(socket->hash_code());
     if (map_iter1 != look_up.end())
     {
         look_up.erase(map_iter1);
     }
-    auto map_iter2 = listen_sockets.find(socket->get_local_addr().host_port());
-    if (map_iter2 != listen_sockets.end())
-    {
-        listen_sockets.erase(map_iter2);
-    }
+    // Try to remove from listen
+    deregister_listen_port(socket->get_local_addr().host_port());
     delete socket;
 }
     
@@ -155,18 +154,19 @@ ATP_PROC_RESULT ATPContext::daily_routine(){
     // clear destroyed sockets
     for(ATPSocket * socket : destroyed_sockets){
         // ATPContext::destroy, not ATPSocket::destroy
-        this->destroy(socket);
+        this->destroy_socket(socket);
     }
     destroyed_sockets.clear();
-    if (this->sockets.size() == 0 && this->destroyed_sockets.size() == 0)
+    if (this->finished())
     {
-        #if defined (ATP_LOG_AT_DEBUG)
-            log_debug(this, "Context finished.");
-        #endif
         // There's no sockets active
         // Case 1: If ATP is built in an user program, user catchs the return value ATP_PROC_FINISH,
         // if he has no other missions, he can destroy the context safely by calling `exit(0)`
         // Case 2: If ATP is a service, user should not handle the return value ATP_PROC_FINISH,
+        #if defined (ATP_LOG_AT_DEBUG)
+            log_debug(this, "Context finished.");
+        #endif
+
         return ATP_PROC_FINISH;
     }else{
         return result;
@@ -174,8 +174,7 @@ ATP_PROC_RESULT ATPContext::daily_routine(){
 }
 
 ATPSocket * ATPContext::find_socket_by_fd(const ATPAddrHandle & handle_to, int sockfd){
-    // find in listen
-    // find port by sockfd
+    // When a packet is comming with SYN mark, we should find its dest socket in listen queue by sockfd
     if (handle_to.host_port() == 0 && handle_to.host_addr() == 0)
     {
         // error
@@ -185,6 +184,7 @@ ATPSocket * ATPContext::find_socket_by_fd(const ATPAddrHandle & handle_to, int s
         return nullptr;
     }
     sockaddr_in my_sock; socklen_t my_sock_len = sizeof(my_sock);
+    // get `sockaddr_in` from `sockfd`
     getsockname(sockfd, reinterpret_cast<SA *>(&my_sock), &my_sock_len);
     ATPAddrHandle handle_me(reinterpret_cast<SA *>(&my_sock));
 
@@ -208,7 +208,7 @@ ATPSocket * ATPContext::find_socket_by_fd(const ATPAddrHandle & handle_to, int s
 }
 
 
-ATPSocket * ATPContext::find_socket_by_head(const ATPAddrHandle & handle_to, ATPPacket * pkt){
+ATPSocket * ATPContext::find_socket_by_head(const ATPAddrHandle & handle_to, const ATPPacket * pkt){
     // find in look_up
     if (handle_to.host_port() == 0 && handle_to.host_addr() == 0)
     {

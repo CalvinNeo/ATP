@@ -17,8 +17,8 @@
 *   with this program; if not, write to the Free Software Foundation, Inc.,
 *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 */
-#include "../atp.h"
-#include "../udp_util.h"
+#include "atp_standalone.h"
+#include "udp_util.h"
 #include "test.inc.h"
 #include <iostream>
 #include <thread>
@@ -41,6 +41,7 @@ ATP_PROC_RESULT before_rep_accept(atp_callback_arguments * args){
 
 ATP_PROC_RESULT on_fork(atp_callback_arguments * args){
     printf("Fork socket.\n");
+    args->socket = atp_fork_socket(args->socket);
     atp_set_callback(args->socket, ATP_CALL_ON_RECV, data_arrived);
     valid_sockets.push_back(args->socket);
 }
@@ -67,7 +68,7 @@ void connect_loop(atp_context * context, uint16_t serv_port){
             printf("bind error: %s", strerror(errno));
     }
     atp_listen(socket, serv_port);
-    if(atp_accept(socket) != ATP_PROC_OK){
+    if(atp_standalone_accept(socket) != ATP_PROC_OK){
         puts("Connection Abort.");
     }
     valid_sockets.push_back(socket);

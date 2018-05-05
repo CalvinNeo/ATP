@@ -17,31 +17,10 @@
 *   with this program; if not, write to the Free Software Foundation, Inc.,
 *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 */
-#include "../atp.h"
-#include "../udp_util.h"
-#include "../scaffold.h"
+#include "atp_standalone.h"
+#include "udp_util.h"
 #include "test.inc.h"
 #include <unistd.h>
-
-FILE * fout;
-
-ATP_PROC_RESULT data_arrived(atp_callback_arguments * args){
-    atp_socket * socket = args->socket;
-    size_t length = args->length; 
-    const char * data = args->data;
-
-    fwrite(data, 1, length, fout);
-    return ATP_PROC_OK;
-}
-
-ATP_PROC_RESULT urg_msg_arrived(atp_callback_arguments * args){
-    atp_socket * socket = args->socket;
-    size_t length = args->length; 
-    const char * data = args->data;
-    printf("URG: ");
-    fwrite(data, 1, length, stdout);
-    return ATP_PROC_OK;
-};
 
 int main(int argc, char* argv[], char* env[]){
     int oc;
@@ -49,9 +28,9 @@ int main(int argc, char* argv[], char* env[]){
     bool simulate_delay = false;
     uint16_t serv_port = 9876;
     uint16_t cli_port = 0;
-    char output_file_name[255] = "out.dat";
+    char input_file_name[255] = "in.dat";
     uint16_t sock_id = 0;
-    while((oc = getopt(argc, argv, "o:l:p:s:P:d:")) != -1)
+    while((oc = getopt(argc, argv, "i:l:p:s:P:d:")) != -1)
     {
         switch(oc)
         {
@@ -69,30 +48,31 @@ int main(int argc, char* argv[], char* env[]){
         case 'P':
             sscanf(optarg, "%u", &cli_port);
             break;
-        case 'o':
-            strcpy(output_file_name, optarg);
+        case 'i':
+            strcpy(input_file_name, optarg);
             break;
         case 's':
             sscanf(optarg, "%u", &sock_id);
             break;
         }
     }
-    reg_sigterm_handler(sigterm_handler);
-    fout = fopen(output_file_name, "wb");
+    struct sockaddr_in srv_addr; socklen_t srv_len = sizeof(srv_addr);
 
-    struct sockaddr_in cli_addr; socklen_t cli_len = sizeof(cli_addr);
-    struct sockaddr_in srv_addr;
-
-    char msg[ATP_MAX_READ_BUFFER_SIZE];
+    char recv_msg[ATP_MAX_READ_BUFFER_SIZE];
     int n;
 
+    reg_sigterm_handler(sigterm_handler);
     atp_context * context = atp_create_context();
     atp_socket * socket = atp_create_socket(context);
     if(sock_id != 0){atp_set_long(socket, ATP_API_SOCKID, sock_id); }
-    
     int sockfd = atp_getfd(socket);
-    atp_set_callback(socket, ATP_CALL_ON_RECV, data_arrived);
-    atp_set_callback(socket, ATP_CALL_ON_RECVURG, urg_msg_arrived);
+
+    if(cli_port != 0){
+        struct sockaddr_in cli_addr = make_socketaddr_in(AF_INET, "127.0.0.1", cli_port); 
+        if (bind(sockfd, (SA *) &cli_addr, sizeof cli_addr) < 0)
+            err_sys("bind error");
+    }
+
 
     if(simulate_loss){
         atp_set_callback(socket, ATP_CALL_SENDTO, simulate_packet_loss_sendto);
@@ -104,44 +84,61 @@ int main(int argc, char* argv[], char* env[]){
         atp_set_callback(socket, ATP_CALL_SENDTO, normal_sendto);
     }
 
-    srv_addr = make_socketaddr_in(AF_INET, nullptr, serv_port);
-
-    if (bind(sockfd, (SA *) &srv_addr, sizeof srv_addr) < 0)
-        err_sys("bind error");
-    atp_listen(socket, serv_port);
-    if(atp_accept(socket) != ATP_PROC_OK){
-        puts("Connection Abort.");
+    srv_addr = make_socketaddr_in(AF_INET, "127.0.0.1", serv_port);
+    int res = atp_standalone_connect(socket, (const SA *)&srv_addr, sizeof srv_addr);
+    if(res != ATP_PROC_OK){
+        printf("Connection Abort.\n");
         return 0;
     }
-    bool file_open = true;
-    ATP_PROC_RESULT result;
+
+    activate_nonblock(sockfd);
+    // struct timeval tv; tv.tv_sec = 1;
+    // setsockopt(socket->sockfd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    FILE * fin = fopen(input_file_name, "rb");
+    FileObject fin_obj {fin, ATP_MIN_BUFFER_SIZE};
     while (true) {
-        sockaddr * pcli_addr = (SA *)&cli_addr;
-        if ((n = recvfrom(sockfd, msg, ATP_MAX_READ_BUFFER_SIZE, 0, pcli_addr, &cli_len)) < 0){
-            if(!(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN)) {
-                break; 
+        sockaddr * psock_addr = (SA *)&srv_addr;
+        if ((n = recvfrom(sockfd, recv_msg, ATP_MAX_READ_BUFFER_SIZE, 0, psock_addr, &srv_len)) >= 0){
+            ATP_PROC_RESULT result = atp_process_udp(context, sockfd, recv_msg, n, (const SA *)&srv_addr, srv_len);
+            if (result == ATP_PROC_FINISH)
+            {
+                // `atp_process_udp` called `atp_timer_event` which returned ATP_PROC_FINISH
+                break;
             }
+        }else{
+            // if(!(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN)) break;
             if(atp_timer_event(context, 1000) == ATP_PROC_FINISH){
                 // Context finished, mission completed, quit
                 break;
             }
-        }else{
-            result = atp_process_udp(context, sockfd, msg, n, (const SA *)&cli_addr, cli_len);
         }
-        if (atp_eof(socket))
-        {
-            if (file_open)
-            {
-                fclose(fout);
+        if(!fin_obj.eof()){
+            while(!fin_obj.eof()){
+                size_t buffer_sz;
+                char * buffer = fin_obj.get(buffer_sz);
+                atp_result r = atp_async_write(socket, buffer, buffer_sz);
+                if (r >= 0)
+                {
+                    fin_obj.ack_by_n(r);
+                }
+                if (r != buffer_sz)
+                {
+                   // Can't hold
+                   break; 
+                }
             }
-            file_open = false;
-        }
-        if (result == ATP_PROC_FINISH)
-        {
-            break;
+        }else{
+            if (atp_get_long(socket, ATP_API_SENDINGSTATUS) == ATP_PROC_OK)
+            {
+                // all packets are ACKed
+                puts("Trans Finished");
+                atp_standalone_close(socket);
+                break;
+            }
         }
     }
+    fclose(fin);
     puts("Quit.");
     delete context; context = nullptr;
     return 0;
-}
+};

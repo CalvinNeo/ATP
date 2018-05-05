@@ -78,13 +78,7 @@ def start_procs(exes, in_shell = False):
         time.sleep(0.5)
     return procs
 
-def test_once4(exe_send, exe_recv, input_fn, output_fn, timeout):
-    exe_recv = (exe_recv + ["-o" + output_fn], None, open("r.log", "w"), open("r1.log", "w"))
-    exe_send = (exe_send + ["-i" + input_fn], None, open("s.log", "w"), open("s1.log", "w"))
-
-    procs = start_procs([exe_recv, exe_send])
-    wait_procs(procs, timeout)
-
+def check_log(input_fn, output_fn):
     try:
         print "in size {}".format(os.path.getsize(input_fn))
         print "out size {}".format(os.path.getsize(output_fn))
@@ -92,8 +86,16 @@ def test_once4(exe_send, exe_recv, input_fn, output_fn, timeout):
     except OSError:
         pass
 
+def test_once4(exe_send, exe_recv, input_fn, output_fn, timeout):
+    exe_recv = (exe_recv + ["-o" + output_fn], None, open("r.log", "w"), open("r1.log", "w"))
+    exe_send = (exe_send + ["-i" + input_fn], None, open("s.log", "w"), open("s1.log", "w"))
+
+    procs = start_procs([exe_recv, exe_send])
+    wait_procs(procs, timeout)
+    check_log(input_fn, output_fn)
+
 def test_multi():
-    print "test fork"
+    print "-- test fork"
     r = (["./bin/multi_recv"], None, open("r.log", "w"), open("r1.log", "w"))
     s1 = (["./bin/send"], subprocess.PIPE, open("s_1.log", "w"), open("s1_1.log", "w"))
     s2 = (["./bin/send"], subprocess.PIPE, open("s_2.log", "w"), open("s1_2.log", "w"))
@@ -117,7 +119,7 @@ def test_multi():
 
 
 def test_normal():
-    print "test poll and urg"
+    print "-- test poll and urg"
     r = (["./bin/recvfile", "-oout.dat"], subprocess.PIPE, open("r.log", "w"), open("r1.log", "w"))
     s = (["./bin/sendfile_poll", "-iin.dat", "-d0", "-l0"], subprocess.PIPE, open("s.log", "w"), open("s1.log", "w"))
     procs = start_procs([r, s])
@@ -134,11 +136,12 @@ def test_normal():
     t.start()
     wait_procs(procs, 20.0)
     t.join()
+    check_log("in.dat", "out.dat")
 
-    print "test normal"
+    print "-- test normal"
     test_once4(["./bin/sendfile"], ["./bin/recvfile"], "in.dat", "out.dat", 20.0)
 
-    print "test clock drift"
+    print "-- test clock drift"
     r = (["./bin/recv -s"], None, open("r.log", "w"), open("r1.log", "w"))
     s = (["./bin/send -s"], subprocess.PIPE, open("s.log", "w"), open("s1.log", "w"))
     procs = start_procs([r, s], True) # Must in shell, otherwise cause strange block
@@ -161,9 +164,10 @@ def test_normal():
 
 
 def test_invalid_conditions():
-    print "test sending invalid packet"
+    print "-- test sending invalid packet"
     def callback_invalid():
-        time.sleep(0.8)
+        # We must precisely controls the time, so recvfile will not terminate prematurely
+        time.sleep(0.15)
         print "send simulated SYN packet to a non-exist socket."
         # In this case, recvfile is no longer listening to port 9876, so there will be a "Can't locate ... by fd" error in r1.log
         subprocess.call([os.getcwd() + '/bin/packet_sim', '-s0', '-a0', '-i113', '-o0', '-fS', '-w65535', '-p9876'], stdout=None)
@@ -181,17 +185,68 @@ def test_invalid_conditions():
     t.join()
 
     # print "test on a non-listening port"
-    # In this case, recvfile will receive no UDP packet from sendfile
+    # In this case, recvfile's context will receive no UDP packet from sendfile
     test_once4(["./bin/sendfile", "-p9876"], ["./bin/recvfile", "-p9877"], "in.dat", "out.dat", 15.0)
 
 def test_on_bad_network():
-    print "test at 1000ms delay(connection may not be established)"
+    print "-- test at 1000ms delay(connection may not be established)"
     test_once4(["./bin/sendfile", "-d1000"], ["./bin/recvfile", "-d1000"], "in.dat", "out.dat", 50.0)
 
-    print "test at 50% loss rate"
+    print "-- test at 50% loss rate"
     test_once4(["./bin/sendfile", "-l0.5"], ["./bin/recvfile", "-l0.5"], "in.dat", "out.dat", 130.0)
 
-def main(): 
+def test_server():
+    print "-- test server"
+    r = (["./bin/recv_server"], None, open("r.log", "w"), open("r1.log", "w"))
+    s = (["./bin/send_server"], subprocess.PIPE, open("s.log", "w"), open("s1.log", "w"))
+    procs = start_procs([r, s], True) # Must in shell, otherwise cause strange block
+    def callback_server():
+        time.sleep(1) # wait till connection is established
+        print "start sending data"
+        procs[1].stdin.write("sssssssss\n")
+        print "end sending simulated packets"
+        procs[1].stdin.close()
+
+    t = Thread(target=callback_server)
+    t.start()
+    wait_procs(procs, 10.0)
+    t.join()
+
+
+def test_rep():
+    print "--test repeat"
+    subprocess.call("sudo tc qdisc add dev lo root netem duplicate 50%".split())
+    test_once4(["./bin/sendfile"], ["./bin/recvfile"], "in.dat", "out.dat", 20.0)
+    subprocess.call("sudo tc qdisc del dev lo root netem".split())
+
+def test_reorder():
+    print "-- test reorder"
+    subprocess.call("sudo tc qdisc add dev lo root netem delay 500ms reorder 25% 50%".split())
+    test_once4(["./bin/sendfile"], ["./bin/recvfile"], "in.dat", "out.dat", 20.0)
+    subprocess.call("sudo tc qdisc del dev lo root netem".split())
+
+def test_bad_packet():
+    print "-- test bad packet"
+    subprocess.call("sudo tc qdisc add dev lo root netem corrupt 30%".split())
+    test_once4(["./bin/sendfile"], ["./bin/recvfile"], "in.dat", "out.dat", 20.0)
+    subprocess.call("sudo tc qdisc del dev lo root netem".split())
+
+def memcheck():
+    def start_sender():
+        subprocess.call("valgrind --tool=memcheck --leak-check=yes --show-reachable=yes ./bin/sendfile".split())
+
+    def start_recver():
+        subprocess.call("valgrind --tool=memcheck --leak-check=yes --show-reachable=yes ./bin/recvfile".split())
+    
+    t1 = Thread(target=start_recver)
+    t2 = Thread(target=start_sender)
+    t1.start()
+    time.sleep(0.1)
+    t2.start()
+    t1.join()
+    t2.join()
+
+def main():
     test_multi()
 
     test_normal()
@@ -199,6 +254,16 @@ def main():
     test_on_bad_network()
 
     test_invalid_conditions()
+
+    test_server()
+
+    test_rep()
+    
+    test_reorder()
+
+    test_bad_packet()
+
+    # memcheck()
 
     return
 

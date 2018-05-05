@@ -59,6 +59,7 @@ protected:
     std::function<T*()> gen;
 };
 
+#define _ATP_LOG_TBUF
 #ifdef _ATP_LOG_TBUF
 #define _log_tbuf printf
 #else
@@ -91,35 +92,31 @@ struct TBuffer{
         oldest_index = UINT_MAX;
         newest_index = 0;
     }
-    T * get(size_t index){
-        size_t pos = get_pos(index);
-        T * ans = data[pos];
+    T * front(){
+        return at(oldest_index);
+    }
+    void pop_front(){
+        size_t pos = get_pos(oldest_index);
         data[pos] = nullptr;
-        if (index == oldest_index)
-        {
-            oldest_index--;
-        }else if(index == newest_index){
-            oldest_index++;
-        }
-        return ans;
+        oldest_index++;
+        _log_tbuf("After pop front, Old index %u, new index %u, size %u\n", oldest_index, newest_index, size());
     }
     T * at(size_t index){
         size_t pos = get_pos(index);
         return data[pos];
     }
     void put(size_t index, T * item){
+        size_t req = need_grow(index);
         if(empty()){
-            pivot = index;
+            oldest_index = newest_index = pivot = index;
+            _log_tbuf("Set pivot to %u\n", pivot);
         }
-
-        if(need_grow(index)){
-            _log_tbuf("Start to Expand capacity to %u\n", capacity * 2);
-            grow();
+        if(req > 0){
+            grow(req);
         }
         size_t pos = get_pos(index);
-        _log_tbuf("Distance between %u ans pivot %u is %u. Capacity %u\n", index, pivot, distance(index), capacity);
+        _log_tbuf("Distance between %u and pivot %u is %u. Capacity %u\n", index, pivot, distance(index), capacity);
         _log_tbuf("Calculated pos for index %u is %u. Pivot %u, Pointer at pos is %u\n", index, pos, pivot, data[pos]);
-        _log_tbuf("After insert, Old index %u, new index %u\n", oldest_index, newest_index);
 
         assert(data[pos] == nullptr);
         data[pos] = item;
@@ -130,6 +127,8 @@ struct TBuffer{
         if(index > newest_index){
             newest_index = index;
         }
+        _log_tbuf("After insert, Old index %u, new index %u, size %u\n", oldest_index, newest_index, size());
+
     }
     void clear(){
         // Don't help user deleting items
@@ -146,27 +145,47 @@ struct TBuffer{
     bool empty() const{
         return size() == 0;
     }
-    void grow(){
-        T ** newdata = new T*[capacity * 2](nullptr);
+    size_t next_pow_of_2(size_t n){
+        n--;
+        n |= n >> 1; n |= n >> 2;
+        n |= n >> 4; n |= n >> 8; n |= n >> 16;
+        n++;
+        return n;
+    }
+    void grow(size_t ensured_size){
+        size_t new_capacity = next_pow_of_2(ensured_size);
+        _log_tbuf("Compute new capacity to be at least %u, actually %u \n", ensured_size, new_capacity);
+        T ** newdata = new T*[new_capacity](nullptr);
         _log_tbuf("Re-locate elements from old index %u to new index %u \n", oldest_index, newest_index);
         for(size_t i = 0; i < size(); i++){
             size_t index = i + oldest_index;
             T * x = at(index);
             newdata[i] = x;
-            _log_tbuf("Move %u-th element %u of old to %u-element of new\n", index, x, i);
+            _log_tbuf("Move [%u]-th element old[%u]=%u to new[%u]\n", index, get_pos(index), x, i);
         }
-        // By default, `pivot` = `oldest_index`
-        pivot = oldest_index;
-        _log_tbuf("Set pivot to %u\n", pivot);
-        capacity *= 2;
+        capacity = new_capacity;
         delete [] data;
         data = newdata;
     }
-    bool need_grow(size_t index){
+    size_t need_grow(size_t index){
+        if (empty())
+        {
+            return 1;
+        }
         if(index <= oldest_index){
-            return (newest_index - index) >= capacity;
+            // Previous
+            if( (newest_index - index) >= capacity ){
+                return newest_index - index + 1;
+            }else{
+                return 0;
+            }
         }else{
-            return (index - oldest_index) >= capacity;
+            // Rear
+            if( (index - oldest_index) >= capacity ){
+                return index - oldest_index + 1;
+            }else{
+                return 0;
+            }
         }
     }
     TBuffer(){

@@ -21,7 +21,7 @@ before_install:
     - sudo pip install -U cpp-coveralls
 
 script: 
-  - make demos_cov
+  - make demos MODE=COV
 
 
 after_success:

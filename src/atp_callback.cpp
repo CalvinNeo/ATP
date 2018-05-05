@@ -82,7 +82,7 @@ void init_callbacks(ATPSocket * socket){
     socket->callbacks[ATP_CALL_ON_DESTROY] = [](atp_callback_arguments * args){
         atp_socket * socket = args->socket;
         #if defined (ATP_LOG_AT_DEBUG) && defined(ATP_LOG_UDP)
-            log_debug(socket, "Destroy socket.");
+            log_debug(socket, "Destroy socket callback.");
         #endif
         return ATP_PROC_FINISH;
     };

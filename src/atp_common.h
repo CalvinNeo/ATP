@@ -39,6 +39,9 @@ extern "C" {
 #endif
 
 enum CONN_STATE_ENUM {
+    // NOTICE Order is very important because we use `>=` to compare states.
+    // Ref atp.cpp and atp_svc.cpp for more
+    // Do not change order unless you know what you are doing!!!
     CS_UNINITIALIZED = 0,
     CS_IDLE,
 
@@ -63,11 +66,11 @@ enum CONN_STATE_ENUM {
     CS_LAST_ACK, // B
     // The end of side A, wait 2 * MSL and then goto CS_DESTROY
     CS_TIME_WAIT,
-    // The end of side B
-    CS_DESTROY,
-
     // When a socket at listening port is disconnect, its state goes to CS_PASSIVE_LISTEN rather than CS_DESTROY
     CS_PASSIVE_LISTEN,
+    // The end of side B, and the final state of side B
+    CS_DESTROY,
+
 
     CS_STATE_COUNT
 };
