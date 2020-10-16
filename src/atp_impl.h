@@ -36,13 +36,13 @@
 #define LOGLEVEL_FATAL 1
 #define LOGLEVEL_NOTE 2
 #define LOGLEVEL_DEBUG 3
-// define thiws macro to enable basic logging
-#define ATP_LOG_AT_NOTE
-// define this macro to enable detailed logging message
+// Define this macro to enable basic logging
+// #define ATP_LOG_AT_NOTE
+// Define this macro to enable detailed logging message
 // #define ATP_LOG_AT_DEBUG
-// define this macro to show debuging message at UDP level
+// Define this macro to show debuging message at UDP level
 // #define ATP_LOG_UDP
-// define this macro to force a seq_nr overflowing situation
+// Define this macro to force a seq_nr overflowing situation
 // #define ATP_DEBUG_TEST_OVERFLOW
 
 // #define ATP_SHUTDOWN_SYN
@@ -50,18 +50,18 @@
 #define _log_doit _log_doit1
 void _log_doit1(ATPSocket * socket, char const* func_name, int line, int level, char const * fmt, va_list va);
 void _log_doit1(ATPContext * context, char const* func_name, int line, int level, char const * fmt, va_list va);
-struct _log_doit2{
-    operator std::function<void(ATPSocket *, char const *, va_list)> () const{
-        return [&](ATPSocket * x, char const * fmt, va_list va){
+struct _log_doit2 {
+    operator std::function<void(ATPSocket *, char const *, va_list)> () const {
+        return [&](ATPSocket * x, char const * fmt, va_list va) {
             _log_doit1(x, func_name, line, level, fmt, va);
         };
     }
-    operator std::function<void(ATPContext *, char const *, va_list)> () const{
-        return [&](ATPContext * x, char const * fmt, va_list va){
+    operator std::function<void(ATPContext *, char const *, va_list)> () const {
+        return [&](ATPContext * x, char const * fmt, va_list va) {
             _log_doit1(x, func_name, line, level, fmt, va);
         };
     }
-    _log_doit2(const char* f, int line_no, int l) : func_name(f), level(l), line(line_no){
+    _log_doit2(const char* f, int line_no, int l) : func_name(f), level(l), line(line_no) {
 
     }
     const char* func_name;
@@ -107,7 +107,7 @@ void log_note2(std::function<void(ATPContext *, char const *, va_list)> f, ATPCo
 #define PACKETFLAG_URG 0b00100000
 #define PACKETFLAG_MASK 0xff
 
-enum ATP_OPTION_TYPE{
+enum ATP_OPTION_TYPE {
     ATP_OPT_SOCKID = 0,
     ATP_OPT_MSS,
     ATP_OPT_SACK,
@@ -115,12 +115,12 @@ enum ATP_OPTION_TYPE{
     ATP_OPT_TIMESTAMP
 };
 
-struct PACKED_ATTRIBUTE ATPPacket : public CATPPacket{
+struct PACKED_ATTRIBUTE ATPPacket : public CATPPacket {
     // apt packet layout, trivial
 
 #define MAKE_FLAGS_GETTER_SETTER(fn, mn) void set_##fn(uint8_t v){ \
         if(v) flags |= mn; else flags &= (~mn); flags &= PACKETFLAG_MASK; } \
-    uint8_t get_##fn() const{ return (flags & mn) == 0 ? 0 : 1;} 
+    uint8_t get_##fn() const{ return (flags & mn) == 0 ? 0 : 1;}
 
     MAKE_FLAGS_GETTER_SETTER(fin, PACKETFLAG_FIN);
     MAKE_FLAGS_GETTER_SETTER(syn, PACKETFLAG_SYN);
@@ -130,30 +130,30 @@ struct PACKED_ATTRIBUTE ATPPacket : public CATPPacket{
     MAKE_FLAGS_GETTER_SETTER(urg, PACKETFLAG_URG);
 
     template <typename ... Args>
-    static uint16_t create_flags(Args&& ... args){
+    static uint16_t create_flags(Args&& ... args) {
         uint16_t f = ( ... | args) & PACKETFLAG_MASK;
         return f;
     }
 
-    bool has(uint8_t f) const{
+    bool has(uint8_t f) const {
         return (flags & f) == 0 ? 0 : 1;
     }
 
     template <typename ... Args>
-    static bool any(Args&& ... args){
+    static bool any(Args&& ... args) {
         std::array<uint16_t, sizeof...(Args)> value = { args... };
-        for(const auto & s: value){
-            if(has(s)){
+        for (const auto & s : value) {
+            if (has(s)) {
                 return true;
             }
         }
         return false;
     }
     template <typename ... Args>
-    static bool all(Args&& ... args){
+    static bool all(Args&& ... args) {
         std::array<uint16_t, sizeof...(Args)> value = { args... };
-        for(const auto & s: value){
-            if(!has(s)){
+        for (const auto & s : value) {
+            if (!has(s)) {
                 return false;
             }
         }
@@ -170,77 +170,77 @@ static_assert(sizeof(ATPPacket) == 10, "ATPPacket's size is not equal to 10");
 
 extern const char * CONN_STATE_STRS [];
 
-struct ATPAddrHandle{
-    ATPAddrHandle(){
+struct ATPAddrHandle {
+    ATPAddrHandle() {
         std::memset(&sa, 0, sizeof sa);
     }
-    ATPAddrHandle(const struct sockaddr * _sa){
+    ATPAddrHandle(const struct sockaddr * _sa) {
         sa = *(reinterpret_cast<const sockaddr_in *>(_sa));
     }
-    ATPAddrHandle & operator=(const ATPAddrHandle & rhs){
-        if(this == &rhs){
+    ATPAddrHandle & operator=(const ATPAddrHandle & rhs) {
+        if (this == &rhs) {
             return *this;
         }
         sa = rhs.sa;
         return *this;
     }
-    ATPAddrHandle & operator=(const sockaddr_in & rhs){
+    ATPAddrHandle & operator=(const sockaddr_in & rhs) {
         sa = rhs;
         return *this;
     }
-    inline bool operator==(const ATPAddrHandle & rhs) const{
-        if(this == &rhs){
+    inline bool operator==(const ATPAddrHandle & rhs) const {
+        if (this == &rhs) {
             return true;
         }
         return (port() == rhs.port() && addr() == rhs.addr());
     }
-    inline bool operator!=(const ATPAddrHandle & rhs) const{
+    inline bool operator!=(const ATPAddrHandle & rhs) const {
         return !(*this == rhs);
     }
-    inline void from_string(const char * _ipaddstr, int _port){
+    inline void from_string(const char * _ipaddstr, int _port) {
         int n;
         if ((n = ::inet_pton(sa.sin_family, _ipaddstr, &(sa.sin_addr.s_addr))) < 0)
-            err_sys("inet_pton error -1"); 
+            err_sys("inet_pton error -1");
         else if (n == 0)
-            err_sys("inet_pton error 0"); 
+            err_sys("inet_pton error 0");
         set_port(_port);
     }
-    inline const char * to_string() const{
+    inline const char * to_string() const {
         ::inet_ntop(sa.sin_family, &addr(), fmt, INET_ADDRSTRLEN);
         return const_cast<const char *>(fmt);
     }
-    inline const char * hash_code() const{
+    inline const char * hash_code() const {
         std::sprintf(fmt, "%s:%05u", to_string(), host_port());
         return const_cast<const char *>(fmt);
     }
-    inline void set_port(in_port_t _port){
+    inline void set_port(in_port_t _port) {
         sa.sin_port = htons(_port);
     }
-    inline void set_addr(in_addr_t _addr){
+    inline void set_addr(in_addr_t _addr) {
         sa.sin_addr.s_addr = htonl(_addr);
     }
-    inline in_port_t & port(){
+    inline in_port_t & port() {
         return sa.sin_port;
     }
-    inline in_addr_t & addr(){
+    inline in_addr_t & addr() {
         return sa.sin_addr.s_addr;
     }
-    inline const in_port_t & port() const{
+    inline const in_port_t & port() const {
         return sa.sin_port;
     }
-    inline const in_addr_t & addr() const{
+    inline const in_addr_t & addr() const {
         return sa.sin_addr.s_addr;
     }
-    inline uint16_t host_port() const{
+    inline uint16_t host_port() const {
         return ntohs(sa.sin_port);
     }
-    inline uint32_t host_addr() const{
+    inline uint32_t host_addr() const {
         return ntohl(sa.sin_addr.s_addr);
     }
     inline decltype(sockaddr_in::sin_family) & family() {
         return sa.sin_family;
     }
-    inline size_t length() const{
+    inline size_t length() const {
         return sizeof sa;
     }
     struct sockaddr_in sa;
@@ -248,20 +248,22 @@ private:
     mutable char fmt[INET_ADDRSTRLEN];
 };
 
-struct PACKED_ATTRIBUTE TimeDelayOption{
+struct PACKED_ATTRIBUTE TimeDelayOption {
     // Our local time when we receive a time delay probing packet from peer
     uint64_t receive_timestamp;
     // Our local time when we reply to peer our time delay infos
     uint64_t reply_timestamp;
 };
 
-struct OutgoingPacket{
-    ~OutgoingPacket(){
-        if(!observer)
+struct OutgoingPacket {
+    ~OutgoingPacket() {
+        if (!observer)
             destroy();
     }
 
-    // Don't directly call `new OutgoingPacket`
+    // Don't directly call `new OutgoingPacket` to for a new OutgoingPacket. Because:
+    // 1. In former/later version, some fields should be initialized with non-zero value.
+    // 2. `OutgoingPacket` should be aggregate constructible.
     uint8_t observer: 1, marked: 1, selective_acked: 1, ahead_handled: 1, need_resend: 1;
     size_t length = 0; // length of the whole
     size_t payload = 0;
@@ -272,24 +274,24 @@ struct OutgoingPacket{
     // IMPORTANT: `data` is allocated by malloc/free, not new/delete
     char * data; // = head + data
 
-    void destroy(){
+    void destroy() {
         // TODO now manually managing memory, swith to smart pointers later
 
-        #if defined (ATP_LOG_AT_DEBUG)
-            if(data)
-                fprintf(stderr, "Packet destructed with seq %u.\n", get_head()->seq_nr);
-            else
-                fprintf(stderr, "Packet destructed.\n");
-        #endif
+#if defined (ATP_LOG_AT_DEBUG)
+        if (data)
+            fprintf(stderr, "Packet destructed with seq %u.\n", get_head()->seq_nr);
+        else
+            fprintf(stderr, "Packet destructed.\n");
+#endif
         std::free(data);
         data = nullptr;
     }
-    char * find_option(uint8_t opt_kind){
+    char * find_option(uint8_t opt_kind) {
         char * p = data + sizeof(ATPPacket);
-        for(uint8_t i = 0; i < get_head()->opts_count; i++){
+        for (uint8_t i = 0; i < get_head()->opts_count; i++) {
             uint8_t k = *reinterpret_cast<uint8_t*>(p);
             uint8_t l = *reinterpret_cast<uint8_t*>(p + sizeof(uint8_t));
-            if(k == opt_kind){
+            if (k == opt_kind) {
                 return p;
             }
             p += 2 * sizeof(uint8_t);
@@ -298,12 +300,12 @@ struct OutgoingPacket{
         return nullptr;
     }
 
-    size_t update_real_payload(){
+    size_t update_real_payload() {
         // This function is used to calculate a received packet.
         // For sent packet, `add_option` update `option_len` automatically.
         option_len = 0;
         char * p = data + sizeof(ATPPacket);
-        for(uint8_t i = 0; i < get_head()->opts_count; i++){
+        for (uint8_t i = 0; i < get_head()->opts_count; i++) {
             uint8_t l = *reinterpret_cast<uint8_t*>(p + sizeof(uint8_t));
             option_len += 2 * sizeof(uint8_t);
             option_len += l;
@@ -314,48 +316,48 @@ struct OutgoingPacket{
         return payload - option_len;
     }
 
-    size_t real_payload() const{
+    size_t real_payload() const {
         // payload without options
         return payload - option_len;
     }
 
-    bool is_empty_ack() const{
+    bool is_empty_ack() const {
         return !is_promised_packet();
     }
 
-    bool is_promised_packet() const{
-        // a promised packet will be resend if not got ACK from peer
-        // only promised packet has seq_nr
-        if(get_head()->get_syn() || get_head()->get_fin()){
+    bool is_promised_packet() const {
+        // A promised packet will be resend if not got ACK from peer.
+        // Only promised packet increases `seq_nr`.
+        if (get_head()->get_syn() || get_head()->get_fin()) {
             // Notice that SYN/FIN are promised, though they have no user data
             return true;
         }
         if (payload == 0)
         {
-            // an payload == 0 packet must ACK
+            // An `payload` == 0 packet must be ACK packet, otherwise it should not be sent.
             assert(get_head()->get_ack());
             return false;
-        }else if(get_head()->opts_count > 0 && real_payload() == 0){
-            // with option
+        } else if (get_head()->opts_count > 0 && real_payload() == 0) {
+            // With option
             return false;
         }
         return true;
     }
 
-    bool has_user_data() const{
-        if(get_head()->get_syn() || get_head()->get_fin()){
+    bool has_user_data() const {
+        if (get_head()->get_syn() || get_head()->get_fin()) {
             return false;
         }
         if (payload == 0)
         {
             return false;
-        }else if(get_head()->opts_count > 0 && real_payload() == 0)
+        } else if (get_head()->opts_count > 0 && real_payload() == 0)
         {
             return false;
         }
         return true;
     }
-    ATPPacket * get_head(){
+    ATPPacket * get_head() {
         return reinterpret_cast<ATPPacket *>(data);
     }
     const ATPPacket * get_head() const {
@@ -365,19 +367,37 @@ struct OutgoingPacket{
     static std::string get_flags_str(OutgoingPacket const * out_pkt);
 };
 
-struct ATPSocket{
+template<class T, typename... Args>
+inline decltype(void(T{std::declval<Args>()...}), std::true_type()) _is_braces_constructible_test(int);
+template<class T, typename... Args>
+inline std::false_type _is_braces_constructible_test(...);
+template<class T, typename... Args>
+struct is_braces_constructible : decltype(_is_braces_constructible_test<T, Args...>(0)) {};
+
+static_assert(is_braces_constructible<OutgoingPacket,
+              uint8_t, uint8_t, uint8_t, uint8_t, uint8_t,
+              size_t, size_t, size_t,
+              uint64_t,
+              uint32_t, uint32_t,
+              char *>::value,
+              "OutgoingPacket is not trivially constructible");
+
+struct ATPSocket {
     ATPContext * context = nullptr;
-    // sockids function as an extra "port"
+    // `sock_id` function as an extra "port", it helps when
+    // 1. Migrate underlying layers.
+    // 2. Fork a connection.
+    // 3. Reduce 2MSL time.
     uint16_t sock_id;
     // peer sock id is set by ATP_OPT_SOCKID at connection establishing stage
     uint16_t peer_sock_id = 0;
 
     mutable ATPAddrHandle local_addr;
-    inline ATPAddrHandle & get_local_addr() const{
+    inline ATPAddrHandle & get_local_addr() const {
         if (conn_state == CS_UNINITIALIZED)
         {
             return local_addr;
-        }else{
+        } else {
             if (local_addr.host_port() == 0 && local_addr.host_addr() == 0)
             {
             }
@@ -392,40 +412,54 @@ struct ATPSocket{
 
     CONN_STATE_ENUM conn_state;
 
-    struct _cmp_outgoingpacket_fullseq{  
-        bool operator()(OutgoingPacket * left, OutgoingPacket * right){  
-            if(left->full_seq_nr == right->full_seq_nr)  return left > right;  
-            return left->full_seq_nr > right->full_seq_nr;  
-        }  
-    }; 
-    struct _cmp_outgoingpacket{  
-        bool operator()(OutgoingPacket * left, OutgoingPacket * right){  
-            if(left->get_head()->seq_nr == right->get_head()->seq_nr)  return left > right;  
-            return left->get_head()->seq_nr > right->get_head()->seq_nr;  
-        }  
-    }; 
-    struct _cmp_outgoingpacket_marked{  
-        bool operator()(OutgoingPacket * left, OutgoingPacket * right){  
-            if(left->marked == right->marked)  return left > right;  
+    // Used in outbuf
+    struct _cmp_outgoingpacket_fullseq {
+        bool operator()(OutgoingPacket * left, OutgoingPacket * right) {
+            if (left->full_seq_nr == right->full_seq_nr)  return left > right;
+            return left->full_seq_nr > right->full_seq_nr;
+        }
+    };
+    // Used in inbuf
+    struct _cmp_outgoingpacket {
+        bool operator()(OutgoingPacket * left, OutgoingPacket * right) {
+            if (left->get_head()->seq_nr == right->get_head()->seq_nr)  return left > right;
+            return left->get_head()->seq_nr > right->get_head()->seq_nr;
+        }
+    };
+    struct _cmp_outgoingpacket_marked {
+        bool operator()(OutgoingPacket * left, OutgoingPacket * right) {
+            if (left->marked == right->marked)  return left > right;
             // false | false | ... | true
-            return left->marked == false ? true: false;  
-        }  
-    }; 
-    // std::priority_queue<OutgoingPacket*, std::vector<OutgoingPacket*>, _cmp_outgoingpacket> inbuf;
+            return left->marked == false ? true : false;
+        }
+    };
+#define SWITCHTO_FULLSEQ(BUF) std::make_heap(BUF.begin(), BUF.end(), _cmp_outgoingpacket_fullseq());
+#define SWITCHTO_MARKED(BUF) std::make_heap(BUF.begin(), BUF.end(), _cmp_outgoingpacket_marked());
+
+#define _ATP_NEW_BUFFER
+#if !defined(_ATP_NEW_BUFFER)
     std::vector<OutgoingPacket*> outbuf;
+#define PUSH_OUTBUF(out_pkt) outbuf.push_back(out_pkt); std::push_heap(outbuf.begin(), outbuf.end(), _cmp_outgoingpacket_fullseq());
+#define POP_OUTBUF() std::pop_heap(outbuf.begin(), outbuf.end(), _cmp_outgoingpacket_fullseq()); outbuf.pop_back();
+#else
+    TBuffer<OutgoingPacket> outbuf;
+#define PUSH_OUTBUF(out_pkt) outbuf.put(out_pkt->full_seq_nr, out_pkt);
+#define POP_OUTBUF() outbuf.pop_front();
+#endif
+
     std::vector<OutgoingPacket*> inbuf;
     std::vector<OutgoingPacket*> inbuf_cache2;
 
-    // my seq number
+    // My seq number
     uint32_t seq_nr = 0;
-    // peer's seq number acked by me
+    // Peer's seq number acked by me
     uint32_t ack_nr = 0;
     bool overflow_lock = false;
     bool new_stage_hitted = false;
     static const uint32_t seq_nr_mask = 0xffff;
-    // when peer's seq_nr wrap to 0, peer_seq_nr_base += std::numeric_limits<T>::max()
+    // When peer's seq_nr wrap to 0, peer_seq_nr_base += std::numeric_limits<T>::max()
     uint32_t peer_seq_nr_base = 0;
-    // my seq number acked by peer
+    // My seq number acked by peer
     uint32_t my_seq_acked_by_peer = 0;
 
     // Re-send config
@@ -435,38 +469,37 @@ struct ATPSocket{
     uint32_t ack_delayed_time = 200; // default 200, set 0 to disable delayed ACK
 
     // These are time point, don't modify
-    uint64_t delay_ack_timeout = 0; // at this exact time send delayed ACK, set 0 to cancel a due scheduled ACK
-    uint64_t rto_timeout = 0; // at this exact time(ms) will this socket timeout
-    uint64_t death_timeout = 0; // at this exact time change from TIME_WAIT to DESTROY
-    uint64_t persist_timeout = 0; // at this exact time probe peer's window
+    uint64_t delay_ack_timeout = 0; // At this exact timepoint will this socket send delayed ACK, set 0 to cancel a due scheduled ACK
+    uint64_t rto_timeout = 0; // At this exact timepoint(ms) will this socket timeout
+    uint64_t death_timeout = 0; // At this exact timepoint change from TIME_WAIT to DESTROY
+    uint64_t persist_timeout = 0; // At this exact timepoint will this socket send probing packet for peer's window
 
-    // a global counter for transmissions may be worth used
+    // A global counter for transmissions may be worth used
     uint8_t transmission_counter = 0;
     uint8_t atp_retries1 = 3; // TCP RFC recommends 3
     uint8_t atp_retries2 = 8; // TCP RFC recommends 15
     uint8_t atp_syn_retries1 = 5;
-    uint8_t atp_frr_retries = 0; // Trigger fast retransmit when frr_counter equals to atp_frr_retries 
-    uint8_t frr_counter = 0; // Fast retransmit counter, keep track of repeated ACK. 
-    uint16_t reorder_count = 0; // Reorder couter, keep track of reordered packets. 
+    uint8_t atp_frr_retries = 0; // Trigger fast retransmit when frr_counter equals to atp_frr_retries
+    uint8_t frr_counter = 0; // Fast retransmit counter, keep track of repeated ACK.
+    uint16_t reorder_count = 0; // Reorder couter, keep track of reordered packets.
 
     // Window by Packets
     // NOTICE that type must be `int` rather than any unsigned
     static const int window_packets_unlimited = -1;
-    // set `cur_window_packets` and enable Nagle's stop-and-wait strategy
-    // when set to `window_packets_unlimited` there is no limitation
-    uint32_t cur_window_packets = window_packets_unlimited; 
-    // the number of packets in the send queue
-    // including unsend and un-acked packets
-    // the oldest un-acked packet in the send queue is seq_nr - used_window_packets == my_seq_acked_by_peer
-    uint32_t used_window_packets = 0; 
+    // Set `cur_window_packets` and enable Nagle's stop-and-wait strategy
+    // When set to `window_packets_unlimited` there is no limitation
+    uint32_t cur_window_packets = window_packets_unlimited;
+    // The number of packets in the send queue, including unsend and un-acked packets.
+    // The oldest un-acked packet in the send queue is seq_nr - used_window_packets == my_seq_acked_by_peer
+    uint32_t used_window_packets = 0;
     bool enable_cork = false;
 
     // Window by Bytes
-    // this is byte-wise, set by peer
+    // This is byte-wise, set by peer
     static const size_t window_unlimited = -1;
-    // by default = ATP_MAX_WRITE_BUFFER_SIZE
+    // By default = ATP_MAX_WRITE_BUFFER_SIZE
     size_t cur_window = window_packets_unlimited;
-    // this is byte-wise, payload of in-flight packets + payload of needing to be re-sent packets
+    // This is byte-wise, payload of in-flight packets + payload of needing to be re-sent packets
     size_t used_window = 0;
     // This is the maximum bytes of data per packet peer's buffer can handle
     size_t peer_window = window_packets_unlimited;
@@ -480,20 +513,20 @@ struct ATPSocket{
     // SACK
     // If `peer_max_sack_count != 0` then SACK is enabled by peer, they we can SACK peer's packets
     // `my_max_sack_count` will be sent to peer, with `ATP_OPT_SACKOPT` option to change peer's `peer_max_sack_count` field
-    #ifdef USE_OLD_SACK_FIELD
+#ifdef USE_OLD_SACK_FIELD
     // An old solution directly log sequence numbers of all packets need to be SACKed
     // `peer_max_sack_count` means how many sequence numbers should be attached
     uint8_t peer_max_sack_count = 0;
     uint8_t my_max_sack_count = 5;
-    #else
-    // New solution use a byte array to represent all buffered packets after ack_nr,
-    // an `1` at bit `i` means SACK the packet with `seq_nr == ack_nr + i + 1`
-    // Currently, it means how many bytes should be used to log SACK infomations
+#else
+    // New solution use a byte array to represent all sent packets after index `ack_nr`,
+    // An `1` at bit `i` means SACK the packet with `seq_nr == ack_nr + i + 1`.
+    // Currently, it means how many bytes should be used to log SACK informations.
     uint8_t peer_max_sack_count = 0;
     uint8_t my_max_sack_count = 4;
-    #endif
+#endif
 
-    // callbacks
+    // Callbacks
     // typedef atp_result atp_callback_func(atp_callback_arguments *);
     std::function<atp_result(atp_callback_arguments *)> callbacks[ATP_CALLBACK_SIZE];
 
@@ -503,7 +536,7 @@ struct ATPSocket{
     // When we reset a socket to listening port, we set re_listen = true
     bool re_listen = false;
 
-    struct DelaySample{
+    struct DelaySample {
         // All timepoints are updated if re-transmission occurs
         // T1: Originate Timestamp, timepoint when A send packet P1
         // T2: Receive Timestamp, timepoint when B received P1
@@ -514,24 +547,24 @@ struct ATPSocket{
         uint64_t t3;
         uint64_t t4;
 
-        int64_t get_drift() const{
+        int64_t get_drift() const {
             return (int64_t(t2 - t1) + int64_t(t3 - t4)) / 2;
         }
-        int64_t get_network_delay() const{
+        int64_t get_network_delay() const {
             return (int64_t(t2 - t1) + int64_t(t4 - t3)) / 2;
         }
     };
 
     uint64_t last_receive_timestamp = 0;
     uint64_t last_send_timestamp = 0;
-    DelaySample make_delay_sample(TimeDelayOption time_delay){
+    DelaySample make_delay_sample(TimeDelayOption time_delay) {
         return DelaySample{0, time_delay.receive_timestamp, time_delay.reply_timestamp, 0};
     }
 
-    ~ATPSocket(){
-        #if defined (ATP_LOG_AT_DEBUG)
-            log_debug(this, "Socket destructed.");
-        #endif
+    ~ATPSocket() {
+#if defined (ATP_LOG_AT_DEBUG)
+        log_debug(this, "Socket destructed.");
+#endif
         clear();
     }
     ATPSocket(ATPContext * _context);
@@ -541,21 +574,19 @@ struct ATPSocket{
     OutgoingPacket * basic_send_packet(uint16_t flags);
     OutgoingPacket * construct_packet_from_buffer(const char * buffer, size_t len);
 
-    // INTERFACES
+    // APIS
     void clear();
-    #ifdef _ATP_CLEAR_STATE_FUNC
+#ifdef _ATP_CLEAR_STATE_FUNC
     void clear_state();
-    #endif
-    // called by atp_create_socket, returns sockfd
+#endif
+    // Called by atp_create_socket, returns sockfd
     int init(int family, int type, int protocol);
     int init_fork(ATPSocket * origin);
     virtual ATPSocket * fork_me();
     ATPSocket * fork_basic();
-    // active connect
     ATP_PROC_RESULT connect(const ATPAddrHandle & to_addr);
     ATP_PROC_RESULT listen(uint16_t host_port);
     ATP_PROC_RESULT bind(const ATPAddrHandle & to_addr);
-    // passive connect
     ATP_PROC_RESULT accept(const ATPAddrHandle & to_addr, OutgoingPacket * recv_pkt);
     ATP_PROC_RESULT receive(OutgoingPacket * recv_pkt, size_t real_payload_offset);
     // `send_packet_noguard` is function who actually sends packets
@@ -576,19 +607,19 @@ struct ATPSocket{
         // This function test whether a packet of `with_extra` bytes will reduce window to 0
         if (with_extra == 0) {
             return bytes_can_send_once() == 0 && used_window_packets > cur_window_packets;
-        } else{
+        } else {
             return bytes_can_send_once() < with_extra && used_window_packets + 1 > cur_window_packets;
         }
     }
-    // this function returns immediately after the packet is sent(whether succeed or fail)
+    // This function returns immediately after the packet is sent(whether succeed or fail)
     ATP_PROC_RESULT write(const void * buf, const size_t len);
     ATP_PROC_RESULT write_oob(const void * buf, const size_t len, uint32_t timeout);
-    // this function returns only when got ack from peer
+    // This function returns only when got ack from peer
     // ATP_PROC_RESULT blocked_write(const void * buf, const size_t len);
 
-    // handles FIN
+    // Handles FIN
     ATP_PROC_RESULT check_fin(OutgoingPacket * recv_pkt);
-    // handles ACK, when a ack packet comes, update ack_nr
+    // Handles ACK, when a ack packet comes, update ack_nr
     ATP_PROC_RESULT update_myack(OutgoingPacket * recv_pkt);
     // Used in restricted situations, such as SYN
     ATP_PROC_RESULT handle_recv_packet_hard(OutgoingPacket * recv_pkt);
@@ -597,27 +628,27 @@ struct ATPSocket{
     void init_connection(OutgoingPacket * recv_pkt, bool active);
     ATP_PROC_RESULT process(const ATPAddrHandle & addr, const char * buffer, size_t len);
     ATP_PROC_RESULT invoke_callback(int callback_type, atp_callback_arguments * args);
-    // update my_seq_acked_by_peer
+    // Update my_seq_acked_by_peer
     ATP_PROC_RESULT do_ack_packet(OutgoingPacket * recv_pkt);
     ATP_PROC_RESULT do_selective_ack_packet(char * peer_ack_nrs, uint8_t count);
     // TODO Following 2 functions are used to reuse packets with no user data to carry user data
     // Find the an empty packet with no payload or only option payload
     OutgoingPacket * find_no_data_packet();
-    // Fill data in a packet, return how many bytes are inserted. 
-    // write -> fill_packet -> add_data
+    // Fill data in a packet, return how many bytes are inserted.
+    // Write -> fill_packet -> add_data
     size_t fill_packet(OutgoingPacket * out_pkt, const char * buffer, size_t len);
     // S->R
     void compute_clock_skew();
     // R->S
     void compute_clock_skew(const TimeDelayOption & delay_option);
-    // get full sequence number according to **current** base
-    uint32_t get_full_seq_nr(uint32_t raw_peer_seq_nr){
+    // Get full sequence number according to **current** base
+    uint32_t get_full_seq_nr(uint32_t raw_peer_seq_nr) {
         return raw_peer_seq_nr + peer_seq_nr_base;
     }
-    // guess which base
+    // Guess which base
     uint32_t guess_full_seq_nr(uint32_t raw_peer_seq);
     uint32_t guess_full_ack_nr(uint32_t raw_peer_ack);
-    // update cur_window according to new `peer_window`
+    // Update cur_window according to new `peer_window`
     void update_window(uint16_t new_peer_window);
     void update_rto(OutgoingPacket * recv_pkt);
     void schedule_ack();
@@ -625,15 +656,15 @@ struct ATPSocket{
     void destroy_hard();
     virtual void switch_state(CONN_STATE_ENUM new_state);
     ATP_PROC_RESULT check_timeout();
-    const char * hash_code() const{
+    const char * hash_code() const {
         return ATPSocket::make_hash_code(sock_id, dest_addr);
     }
-    const char * to_string() const{
+    const char * to_string() const {
         sprintf(hash_str, "[%05u](%s:%05u)->(%s:%05u) fd:%d", sock_id, this->get_local_addr().to_string(), this->get_local_addr().host_port()
-            , dest_addr.to_string(), dest_addr.host_port(), sockfd);
+                , dest_addr.to_string(), dest_addr.host_port(), sockfd);
         return const_cast<const char *>(hash_str);
     }
-    static const char * make_hash_code(uint16_t sock_id, const ATPAddrHandle & dest_addr){
+    static const char * make_hash_code(uint16_t sock_id, const ATPAddrHandle & dest_addr) {
         static char hash_str[INET_ADDRSTRLEN * 2 + 5 * 2 + 10 * 3];
         sprintf(hash_str, "[%05u]%s", sock_id, dest_addr.hash_code());
         return const_cast<const char *>(hash_str);
@@ -644,28 +675,28 @@ private:
 };
 
 
-struct ATPContext{
+struct ATPContext {
     void clear();
     void init();
 
-    ATPContext(){
+    ATPContext() {
         init();
     }
-    ~ATPContext(){
-        #if defined (ATP_LOG_AT_DEBUG)
-            fprintf(stderr, "Context destroyed.\n");
-        #endif
+    ~ATPContext() {
+#if defined (ATP_LOG_AT_DEBUG)
+        fprintf(stderr, "Context destroyed.\n");
+#endif
         clear();
     }
 
-    // because we have peer_sock_id in ATPPacket, 
-    // so we don't need to wait actually 2msl, 
-    // waiting for rto time is enough. 
-    // But you can still set a minimum
-    uint32_t min_msl2 = 6000; 
+    // Because we have peer_sock_id in ATPPacket,
+    // we don't need to wait actually 2msl,
+    // waiting for `rto` time is enough.
+    // But you can still set a minimum TIME_WAIT.
+    uint32_t min_msl2 = 6000;
 
     std::vector<ATPSocket *> sockets;
-    // `look_up` marks every socket's dest_addr and sock_id, 
+    // `look_up` marks every socket's dest_addr and sock_id,
     // so local socket can be located by an in-coming packet
     std::map<std::string, ATPSocket *> look_up;
     // All UDP ports this context owns, with a dominant ATPSocket
@@ -678,36 +709,36 @@ struct ATPContext{
     virtual ATP_PROC_RESULT daily_routine();
     ATPSocket * find_socket_by_fd(const ATPAddrHandle & handle_to, int sockfd);
     ATPSocket * find_socket_by_head(const ATPAddrHandle & handle_to, const ATPPacket * pkt);
-    bool finished() const{
+    bool finished() const {
         return this->sockets.empty() && this->destroyed_sockets.empty();
     }
 
-    virtual ATP_PROC_RESULT register_listen_port(ATPSocket * socket, uint16_t host_port){
+    virtual ATP_PROC_RESULT register_listen_port(ATPSocket * socket, uint16_t host_port) {
         if (listen_sockets.find(host_port) == listen_sockets.end())
         {
             listen_sockets[host_port] = socket;
             return ATP_PROC_OK;
-        }else{
+        } else {
             return ATP_PROC_ERROR;
         }
     }
 
-    virtual void deregister_listen_port(uint16_t host_port){
+    virtual void deregister_listen_port(uint16_t host_port) {
         std::map<uint16_t, ATPSocket *>::iterator iter = listen_sockets.find(host_port);
-        if(iter != listen_sockets.end()){
-            #if defined (ATP_LOG_AT_DEBUG)
+        if (iter != listen_sockets.end()) {
+#if defined (ATP_LOG_AT_DEBUG)
             log_debug(this, "Remove socket from listening.");
-            #endif
+#endif
             listen_sockets.erase(iter);
-        }else{
-            #if defined (ATP_LOG_AT_DEBUG)
+        } else {
+#if defined (ATP_LOG_AT_DEBUG)
             log_debug(this, "Remove socket from listening failed because we couldn't find.");
-            #endif
+#endif
         }
     }
 
-    void register_to_look_up(ATPSocket * socket){
-        // if not registered, can't find `ATPSocket *` by (addr:port)        
+    void register_to_look_up(ATPSocket * socket) {
+        // If socket's not registered, context can't find `ATPSocket *` by (addr:port)
         look_up[ATPSocket::make_hash_code(socket->sock_id, socket->dest_addr)] = socket;
     }
 };

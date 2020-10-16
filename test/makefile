@@ -37,7 +37,7 @@ SRCS = $(wildcard $(SRC_ROOT)/*.cpp)
 OBJS = $(patsubst $(SRC_ROOT)%, $(OBJ_ROOT)%, $(patsubst %cpp, %o, $(SRCS)))
 
 all: demos
-demo_cmd: recv send  packet_sim
+demo_cmd: recv send packet_sim
 demo_file: sendfile recvfile 
 demo_poll: sendfile_poll recvfile
 demo_multi: multi_recv send
@@ -46,7 +46,15 @@ demo_server: recv_server send_server
 demos: demo_cmd demo_file demo_poll demo_multi demo_server buffer_test
 
 
-# use bash's `&` and wait cause trouble here, refer to earlier commits
+slib: $(BIN_ROOT)/libatp.a
+	cd $(ROOT) && make slib
+
+dylib: $(BIN_ROOT)/libatp.so
+	cd $(ROOT) && make dylib
+
+lib: slib dylib
+
+# Use bash's `&` and wait cause trouble here, refer to earlier commits
 run_test:
 	cd $(ROOT) && python test/makedata.py
 	cd $(ROOT) && python test/run_test.py
@@ -66,39 +74,39 @@ run_coveralls: run_cov
 	coveralls -b $(ROOT) -r $(ROOT) --gcov-options '\-r'
 
 buffer_test:  
-	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/buffer_test buffer_test.cpp -L/usr/lib/ $(BIN_ROOT)/libatp.a -I$(ROOT)/src
+	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/buffer_test buffer_test.cpp -L/usr/lib/ -I$(ROOT)/src
 
-recv: 
+recv: slib
 	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/recv recv.cpp -L/usr/lib/ -lpthread $(BIN_ROOT)/libatp.a -I$(ROOT)/src
 
-send: 
+send: slib
 	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/send send.cpp -L/usr/lib/ -lpthread $(BIN_ROOT)/libatp.a -I$(ROOT)/src
 
-sendfile_test: 
+sendfile_test: slib
 	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/sendfile_test sendfile_test.cpp $(TEST_UTILS) -I$(ROOT)/src
 
-sendfile_poll: 
+sendfile_poll: slib
 	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/sendfile_poll sendfile_poll.cpp -L/usr/lib/ -lpthread $(BIN_ROOT)/libatp.a -I$(ROOT)/src
 
-sendfile: 
+sendfile: slib
 	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/sendfile sendfile.cpp -L/usr/lib/ -lpthread $(BIN_ROOT)/libatp.a -I$(ROOT)/src
 
-recvfile: 
+recvfile: slib
 	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/recvfile recvfile.cpp -L/usr/lib/ -lpthread $(BIN_ROOT)/libatp.a -I$(ROOT)/src
 
-send_aio: 
+send_aio: slib
 	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/send_aio send_aio.cpp -L/usr/lib/ -lrt -lpthread $(BIN_ROOT)/libatp.a -I$(ROOT)/src
 
-packet_sim: 
+packet_sim: slib
 	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/packet_sim packet_sim.cpp -L/usr/lib/ -lpthread $(BIN_ROOT)/libatp.a -I$(ROOT)/src
 
-multi_recv: 
+multi_recv: slib
 	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/multi_recv multi_recv.cpp -L/usr/lib/ -lpthread $(BIN_ROOT)/libatp.a -I$(ROOT)/src
 
-recv_server: 
+recv_server: slib
 	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/recv_server recv_server.cpp -L/usr/lib/ -lpthread $(BIN_ROOT)/libatp.a -I$(ROOT)/src
 
-send_server: 
+send_server: slib
 	$(CXX) $(CFLAGS) $(CFLAGS_COV_LNK) -o $(BIN_ROOT)/send_server send_server.cpp -L/usr/lib/ -lpthread $(BIN_ROOT)/libatp.a -I$(ROOT)/src
 
 .PHONY: clean

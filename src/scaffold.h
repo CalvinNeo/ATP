@@ -29,6 +29,7 @@
 #include <functional>
 #include <climits>
 #include <cassert>
+#include <iterator>
 
 template<typename T>
 struct TPool{
@@ -59,7 +60,6 @@ protected:
     std::function<T*()> gen;
 };
 
-#define _ATP_LOG_TBUF
 #ifdef _ATP_LOG_TBUF
 #define _log_tbuf printf
 #else
@@ -68,19 +68,87 @@ protected:
 
 template <typename T>
 struct TBuffer{
-    typedef int distance_t;
+    typedef T * value_type;
+    typedef size_t size_type;
+    typedef value_type * pointer;
+    typedef value_type & reference;
+    typedef const value_type * const_pointer;
+    typedef const value_type & const_reference;
+    typedef int difference_type;
 
-    distance_t distance(size_t index) const{
+    struct Iterator{
+        typedef TBuffer::value_type value_type;
+        typedef TBuffer::size_type size_type;
+        typedef TBuffer::pointer pointer;
+        typedef TBuffer::reference reference;
+        typedef TBuffer::const_pointer const_pointer;
+        typedef TBuffer::const_reference const_reference;
+        typedef TBuffer::difference_type difference_type;
+        typedef std::bidirectional_iterator_tag iterator_category;
+
+        TBuffer * tbuf = nullptr;
+        size_type index = 0;
+
+        bool operator==(const Iterator & x) const{
+            return tbuf == x.tbuf && index == x.index;
+        }
+        bool operator!=(const Iterator & x) const{
+            return tbuf != x.tbuf || index != x.index;
+        }
+        Iterator & operator++(){
+            index++;
+        }
+        Iterator & operator--(){
+            index--;
+        }
+        reference operator*(){
+            return tbuf->at(index);
+        }
+        pointer operator->(){
+            return &(tbuf->at(index));
+        }
+
+        Iterator(){
+
+        }
+        Iterator(TBuffer * buf, size_type i) : tbuf(buf), index(i){
+            
+        }
+        Iterator(const Iterator & iter) :tbuf(iter.tbuf), index(iter.index){
+            
+        }
+    };
+
+    typedef Iterator iterator;
+    typedef const Iterator const_iterator;
+    typedef std::reverse_iterator<iterator> reverse_iterator;
+    typedef std::reverse_iterator<const_iterator> const_reverse_iterator;
+
+    iterator begin(){
+        return iterator(this, oldest_index);
+    }
+    const_iterator begin() const{
+        return iterator(this, oldest_index);
+    }
+
+    iterator end(){
+        return iterator(this, newest_index + 1);
+    }
+    const_iterator end() const{
+        return iterator(this, newest_index + 1);
+    }
+
+    difference_type distance(size_t index) const{
         // By default, `pivot` = `oldest_index`
         if (index < pivot)
         {
-            return -(distance_t)(pivot - index);
+            return -(difference_type)(pivot - index);
         }else{
-            return (distance_t)(index - pivot);
+            return (difference_type)(index - pivot);
         }
     }
-    distance_t get_pos(size_t index) const{
-        distance_t dist = distance(index);
+    difference_type get_pos(size_t index) const{
+        difference_type dist = distance(index);
         assert(dist + capacity >= 0);
         size_t pos = (dist + capacity) % capacity;
         // The `pivot`th element is always at position `data[0]`
@@ -88,26 +156,59 @@ struct TBuffer{
     }
     void init(){
         capacity = 1;
-        data = new T*[capacity](nullptr);
+        valid_size = 0;
+        data = new value_type[capacity](nullptr);
         oldest_index = UINT_MAX;
         newest_index = 0;
     }
-    T * front(){
-        return at(oldest_index);
+    void clear(){
+        // Don't help user deleting items
+        delete [] data;
+        data = nullptr;
+        valid_size = 0;
+    }
+    reference front(){
+        while(oldest_index <= newest_index && at(oldest_index) == nullptr){
+            _log_tbuf("When read front, %u is nullptr, move next\n", oldest_index);
+            oldest_index++;
+        }
+        reference ans = at(oldest_index);
+        return ans;
     }
     void pop_front(){
+        assert(size() > 0);
+        while(oldest_index <= newest_index && at(oldest_index) == nullptr){
+            _log_tbuf("When pop, %u is nullptr, move next\n", oldest_index);
+            oldest_index++;
+        }
         size_t pos = get_pos(oldest_index);
         data[pos] = nullptr;
-        oldest_index++;
+        valid_size--;
         _log_tbuf("After pop front, Old index %u, new index %u, size %u\n", oldest_index, newest_index, size());
     }
-    T * at(size_t index){
+    reference back(){
+        while(oldest_index <= newest_index && at(newest_index) == nullptr){
+            newest_index--;
+        }
+        reference ans = at(newest_index);
+        return ans;
+    }
+    void pop_back(){
+        assert(size() > 0);
+        while(oldest_index <= newest_index && at(newest_index) == nullptr){
+            newest_index--;
+        }
+        size_t pos = get_pos(newest_index);
+        data[pos] = nullptr;
+        valid_size--;
+    }
+    reference at(size_t index){
         size_t pos = get_pos(index);
         return data[pos];
     }
-    void put(size_t index, T * item){
+    void put(size_t index, value_type item){
         size_t req = need_grow(index);
-        if(empty()){
+        if(range() == 0){
             oldest_index = newest_index = pivot = index;
             _log_tbuf("Set pivot to %u\n", pivot);
         }
@@ -120,6 +221,7 @@ struct TBuffer{
 
         assert(data[pos] == nullptr);
         data[pos] = item;
+        valid_size ++;
 
         if(index < oldest_index){
             oldest_index = index;
@@ -130,17 +232,15 @@ struct TBuffer{
         _log_tbuf("After insert, Old index %u, new index %u, size %u\n", oldest_index, newest_index, size());
 
     }
-    void clear(){
-        // Don't help user deleting items
-        delete [] data;
-        data = nullptr;
-    }
-    size_t size() const{
+    size_t range() const{
         if (newest_index < oldest_index)
         {
             return 0;
         }
         return newest_index - oldest_index + 1;
+    }
+    size_t size() const{
+        return valid_size;
     }
     bool empty() const{
         return size() == 0;
@@ -155,20 +255,19 @@ struct TBuffer{
     void grow(size_t ensured_size){
         size_t new_capacity = next_pow_of_2(ensured_size);
         _log_tbuf("Compute new capacity to be at least %u, actually %u \n", ensured_size, new_capacity);
-        T ** newdata = new T*[new_capacity](nullptr);
+        pointer newdata = new value_type[new_capacity](nullptr);
         _log_tbuf("Re-locate elements from old index %u to new index %u \n", oldest_index, newest_index);
-        for(size_t i = 0; i < size(); i++){
+        for(size_t i = 0; i < range(); i++){
             size_t index = i + oldest_index;
-            T * x = at(index);
-            newdata[i] = x;
-            _log_tbuf("Move [%u]-th element old[%u]=%u to new[%u]\n", index, get_pos(index), x, i);
+            newdata[i] = at(index);
+            _log_tbuf("Move [%u]-th element old[%u] to new[%u]\n", index, get_pos(index), i);
         }
         capacity = new_capacity;
         delete [] data;
         data = newdata;
     }
     size_t need_grow(size_t index){
-        if (empty())
+        if (range() == 0)
         {
             return 1;
         }
@@ -195,8 +294,9 @@ struct TBuffer{
         clear();
     }
 protected:
-    size_t oldest_index = UINT_MAX, newest_index = 0, capacity = 0, pivot;
-    T ** data = nullptr;
+    size_t oldest_index = UINT_MAX, newest_index = 0, capacity = 0, pivot, valid_size = 0;
+    // `data` is an array of `value_type`
+    pointer data = nullptr;
 };
 
 

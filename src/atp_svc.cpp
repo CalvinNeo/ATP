@@ -147,7 +147,8 @@ ATP_PROC_RESULT atp_blocked_connect(atp_socket * socket, const struct sockaddr *
     atp_blocked_socket * sock = dynamic_cast<atp_blocked_socket *>(socket);
     assert(sock != nullptr);
 
-    // Register sockfd to epoll 
+    // Register sockfd to epoll manually is IMPORTANT.
+    // In `atp_blocked_accept`, function `register_listen_port` will help you do that.
     atp_context_server * con = dynamic_cast<atp_context_server *>(sock->context);
     assert(con != nullptr);
     con->ev.data.fd = socket->sockfd;

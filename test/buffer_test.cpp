@@ -17,6 +17,9 @@
 *   with this program; if not, write to the Free Software Foundation, Inc.,
 *   51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 */
+
+#define _ATP_LOG_TBUF
+
 #include <cstdio>
 #include <fstream>
 #include <cstdlib>
@@ -39,7 +42,7 @@ bool test(const std::vector<int> & vec, int offset){
     tbuf.init();
     std::string in, out;
     for(int i = 0; i < vec.size(); i++){
-        printf("\nPut %u-th element %d + %d\n", i, vec[i], offset);
+        printf("\nPut %u-th element %d (Offset %d)\n", i, vec[i], offset);
         tbuf.put(offset + vec[i], new int(vec[i]));
         in += ("," + std::to_string(vec[i]));
     }
@@ -49,10 +52,15 @@ bool test(const std::vector<int> & vec, int offset){
         out += ("," + std::to_string(*x));
         delete x;
     }
+
+    in = ""; out = "";
     for(int i = 0; i < vec.size(); i++){
-        printf("\nPut %u-th element %d + %d\n", i, vec[i], offset);
+        printf("\nPut %u-th element %d (Offset %d)\n", i, vec[i], offset);
         tbuf.put(offset + vec[i], new int(vec[i]));
         in += ("," + std::to_string(vec[i]));
+    }
+    for(auto i : tbuf){
+        printf("TBuffer's next element is %d\n", i);
     }
     while(!tbuf.empty()){
         int * x = tbuf.front();
@@ -61,11 +69,31 @@ bool test(const std::vector<int> & vec, int offset){
         delete x;
     }
     printf("I: %s\nO: %s\n", in.c_str(), out.c_str());
+
+    // Lost some index
+    in = ""; out = "";
+    for(int i = 0; i < vec.size(); i++){
+        if(i == 5) continue; // 5's lost
+        printf("\nPut %u-th element %d (Offset %d)\n", i, vec[i], offset);
+        tbuf.put(offset + vec[i], new int(vec[i]));
+        in += ("," + std::to_string(vec[i]));
+    }
+    while(!tbuf.empty()){
+        int * x = tbuf.front();
+        out += ("," + std::to_string(*x));
+        printf("Output %d\n", *x);
+        delete x;
+        tbuf.pop_front();
+    }
+    printf("I: %s\nO: %s\n", in.c_str(), out.c_str());
+
     return in == out;
+
+
 }
 int main(int argc, char* argv[], char* env[]){
     test({1,2,3}, 100);
     test({1,2,3,4,5,6,7,8,9,10}, 200);
-    test({6,7,10,1,8,9,2,3,4,5}, 200);
+    test({6,7,10,1,9,8,2,3,4,5}, 200);
     return 0;
 }

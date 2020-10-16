@@ -5,8 +5,8 @@ cov_comp = -fprofile-arcs -ftest-coverage -fno-inline -DATP_LOG_AT_NOTE -DATP_LO
 cov_lnk = -fprofile-arcs -ftest-coverage --coverage -fno-inline -DATP_LOG_AT_NOTE -DATP_LOG_AT_DEBUG -DATP_LOG_UDP -DATP_DEBUG_TEST_OVERFLOW
 
 NO_WARN = -w
-TRIM_WARN = -Wno-unused-variable -Wno-unused-but-set-variable -Wformat-security
-CFLAGS = -DPOSIX -g -fpermissive -std=c++1z 
+TRIM_WARN = -Wno-unused-variable -Wno-unused-but-set-variable -Wno-format-security -Wno-format
+CFLAGS = -DPOSIX -g -fpermissive -std=c++1z -DATP_LOG_AT_NOTE
 
 ifeq ($(MODE), COV)
 	# "Coverage mode"
@@ -50,7 +50,7 @@ lib: slib dylib
 demos: slib
 	cd $(TEST_ROOT) && make demos MODE=$(MODE)
 
-test: slib
+test: FORCE $(OBJ_ROOT) $(DYOBJ_ROOT)
 	cd $(TEST_ROOT) && make $(TARGET) MODE=$(MODE)
 
 run_test:
@@ -117,3 +117,4 @@ clean_cov:
 kill:
 	ps aux | grep -e send | grep -v grep | awk '{print $$2}' | xargs -i kill {}
 	ps aux | grep -e recv | grep -v grep | awk '{print $$2}' | xargs -i kill {}
+FORCE: 
